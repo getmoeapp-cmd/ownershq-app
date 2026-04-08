@@ -25,3 +25,4 @@ npm run dev
 
 ## Deploy
 Push to GitHub → Vercel auto-deploys.
+
