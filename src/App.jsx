@@ -1,4 +1,37 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+
+// ─── SUPABASE CONFIG ─────────────────────────────────────────
+const SUPABASE_URL = "https://fsvlxosbbevzyvegbqry.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzdmx4b3NiYmV2enl2ZWdicXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NzQ2MjgsImV4cCI6MjA4OTA1MDYyOH0.AcnnB4QecNHEu3-N_VS6aPHrpt9kq464arjNc2DNugU";
+const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" };
+
+// Read from moe_data table
+const sbRead = async (groupId, dataKey) => {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/moe_data?group_id=eq.${groupId}&data_key=eq.${dataKey}&select=data_value`, { headers: SB_HEADERS });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    if (!rows.length) return null;
+    let val = rows[0].data_value;
+    if (typeof val === "string") try { val = JSON.parse(val); } catch {}
+    return val;
+  } catch { return null; }
+};
+
+// Write to moe_data table (upsert)
+const sbWrite = async (groupId, dataKey, dataValue) => {
+  try {
+    const existing = await fetch(`${SUPABASE_URL}/rest/v1/moe_data?group_id=eq.${groupId}&data_key=eq.${dataKey}&select=id`, { headers: SB_HEADERS });
+    const rows = await existing.json();
+    const body = { group_id: groupId, data_key: dataKey, data_value: JSON.stringify(dataValue), updated_at: new Date().toISOString() };
+    if (rows && rows.length > 0) {
+      await fetch(`${SUPABASE_URL}/rest/v1/moe_data?id=eq.${rows[0].id}`, { method: "PATCH", headers: SB_HEADERS, body: JSON.stringify(body) });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/moe_data`, { method: "POST", headers: SB_HEADERS, body: JSON.stringify(body) });
+    }
+    return true;
+  } catch { return false; }
+};
 
 // ─── ICON SYSTEM ─────────────────────────────────────────────
 const Icon = ({ name, size = 18 }) => {
@@ -1132,9 +1165,35 @@ function PnLReports() {
       { id: "u5", name: "Garbage / Waste", amount: "45", freq: "monthly" },
     ],
   });
-  const [adding, setAdding] = useState(null); // which section is being added to
+  const [adding, setAdding] = useState(null);
   const [newName, setNewName] = useState("");
   const [editingName, setEditingName] = useState(null);
+  const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "error"
+  const [loaded, setLoaded] = useState(false);
+
+  // Load P&L data from Supabase on mount
+  useEffect(() => {
+    const load = async () => {
+      const saved = await sbRead("tommys", "pnl_data");
+      if (saved && saved.revenue) {
+        setSections(saved);
+      }
+      setLoaded(true);
+    };
+    load();
+  }, []);
+
+  // Auto-save to Supabase when sections change (debounced)
+  useEffect(() => {
+    if (!loaded) return; // don't save on initial load
+    const timeout = setTimeout(async () => {
+      setSaveStatus("saving");
+      const ok = await sbWrite("tommys", "pnl_data", sections);
+      setSaveStatus(ok ? "saved" : "error");
+      setTimeout(() => setSaveStatus(""), 2000);
+    }, 1500);
+    return () => clearTimeout(timeout);
+  }, [sections, loaded]);
 
   // Conversion
   const toMultiplier = (fromFreq) => {
@@ -1263,6 +1322,7 @@ function PnLReports() {
           {period === "weekly" && <input type="week" value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)} style={{ ...IS, textAlign: "left", width: 160 }}/>}
           {period === "monthly" && <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ ...IS, textAlign: "left", width: 160 }}/>}
           <button onClick={printPnL} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#f472b6", color: "#080c16", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>🖨 Print P&L</button>
+          {saveStatus && <span style={{ fontSize: 11, fontWeight: 600, color: saveStatus === "saved" ? "#00e5a0" : saveStatus === "error" ? "#ef4444" : "rgba(255,255,255,0.4)", padding: "4px 10px", borderRadius: 6, background: saveStatus === "saved" ? "rgba(0,229,160,0.1)" : saveStatus === "error" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.03)" }}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : "Save failed"}</span>}
         </div>
       </div>
 
@@ -1571,7 +1631,52 @@ export default function OwnersHQDashboard() {
   const [ingredients, setIngredients] = useState(MOE_INVENTORY_MOCK);
   const [prepItems, setPrepItems] = useState(INITIAL_PREP_ITEMS);
   const [recipes, setRecipes] = useState(INITIAL_RECIPES);
-  useEffect(() => { setMounted(true); }, []);
+  const [moeStatus, setMoeStatus] = useState("loading"); // loading | connected | fallback
+
+  // Load MOE inventory from Supabase on mount
+  useEffect(() => {
+    setMounted(true);
+    const loadMoe = async () => {
+      try {
+        const itemData = await sbRead("tommys", "itemdata");
+        const stockData = await sbRead("tommys", "stock");
+        if (itemData) {
+          // Parse MOE's itemdata format into our ingredients array
+          const parsed = [];
+          if (typeof itemData === "object") {
+            Object.entries(itemData).forEach(([key, item]) => {
+              if (item && typeof item === "object") {
+                parsed.push({
+                  id: `moe-${key}`,
+                  name: item.name || item.label || key,
+                  vendor: item.vendor || item.supplier || "",
+                  purchasePrice: String(item.price || item.purchasePrice || item.cost || "0"),
+                  unitsPerCase: item.unitsPerCase || item.caseCount || item.perCase || 1,
+                  unitType: item.unit || item.unitType || item.size || "each",
+                  costPerUnit: String(item.costPerUnit || item.unitCost || "0"),
+                  category: item.category || item.section || "",
+                  stock: stockData?.[key] ?? 0,
+                  reorderAt: item.reorderAt || item.reorder || 5,
+                  source: "moe",
+                });
+              }
+            });
+          }
+          if (parsed.length > 0) {
+            setIngredients(parsed);
+            setMoeStatus("connected");
+          } else {
+            setMoeStatus("fallback");
+          }
+        } else {
+          setMoeStatus("fallback");
+        }
+      } catch {
+        setMoeStatus("fallback");
+      }
+    };
+    loadMoe();
+  }, []);
   const currentMod = NAV.find(n => n.id === active);
 
   return (
