@@ -1100,17 +1100,30 @@ function PnLReports() {
     revenue: { food: "12450", beverage: "3200", catering: "1800", other: "350" },
     cogs: { food: "3890", beverage: "820", paper: "310" },
     labor: { salary: "4200", hourly: "2800", payrollTax: "630", benefits: "420" },
-    operating: { rent: "3500", utilities: "680", insurance: "450", marketing: "500", repairs: "200", supplies: "320", tech: "150", misc: "180" },
+    operating: { rent: "3500", insurance: "450", marketing: "500", repairs: "200", supplies: "320", tech: "150", misc: "180" },
   });
+  const [utilities, setUtilities] = useState([
+    { id: "u1", name: "Electric", amount: "280" },
+    { id: "u2", name: "Gas", amount: "150" },
+    { id: "u3", name: "Water", amount: "85" },
+    { id: "u4", name: "Phone / Internet", amount: "120" },
+    { id: "u5", name: "Garbage / Waste", amount: "45" },
+  ]);
+  const [showAddUtility, setShowAddUtility] = useState(false);
+  const [newUtilityName, setNewUtilityName] = useState("");
 
   const updateField = (section, field, value) => setData(d => ({ ...d, [section]: { ...d[section], [field]: value } }));
+  const updateUtility = (id, value) => setUtilities(us => us.map(u => u.id === id ? { ...u, amount: value } : u));
+  const addUtility = () => { if (!newUtilityName.trim()) return; setUtilities(us => [...us, { id: `u${Date.now()}`, name: newUtilityName, amount: "0" }]); setNewUtilityName(""); setShowAddUtility(false); };
+  const deleteUtility = (id) => setUtilities(us => us.filter(u => u.id !== id));
+  const totalUtilities = utilities.reduce((s, u) => s + (parseFloat(u.amount) || 0), 0);
 
   const sum = (section) => Object.values(data[section]).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const totalRevenue = sum("revenue");
   const totalCogs = sum("cogs");
   const grossProfit = totalRevenue - totalCogs;
   const totalLabor = sum("labor");
-  const totalOperating = sum("operating");
+  const totalOperating = sum("operating") + totalUtilities;
   const netProfit = grossProfit - totalLabor - totalOperating;
   const pct = (v) => totalRevenue > 0 ? (v / totalRevenue * 100).toFixed(1) : "0.0";
 
@@ -1148,7 +1161,7 @@ function PnLReports() {
     <h2>Cost of Goods Sold</h2><table>${Object.entries(data.cogs).map(([k,v])=>`<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total COGS</td><td>$${totalCogs.toFixed(2)}</td><td>${pct(totalCogs)}%</td></tr></table>
     <table><tr class="total"><td>Gross Profit</td><td>$${grossProfit.toFixed(2)}</td><td>${pct(grossProfit)}%</td></tr></table>
     <h2>Labor</h2><table>${Object.entries(data.labor).map(([k,v])=>`<tr><td style="padding-left:16px">${k.replace(/([A-Z])/g,' $1').trim()}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total Labor</td><td>$${totalLabor.toFixed(2)}</td><td>${pct(totalLabor)}%</td></tr></table>
-    <h2>Operating Expenses</h2><table>${Object.entries(data.operating).map(([k,v])=>`<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total Operating</td><td>$${totalOperating.toFixed(2)}</td><td>${pct(totalOperating)}%</td></tr></table>
+    <h2>Operating Expenses</h2><table>${Object.entries(data.operating).map(([k,v])=>{if(k==='rent') return `<tr><td style="padding-left:16px">Rent</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>` + utilities.map(u=>`<tr><td style="padding-left:32px;color:#666">↳ ${u.name}</td><td>$${parseFloat(u.amount||0).toFixed(2)}</td><td>${pct(parseFloat(u.amount||0))}%</td></tr>`).join("") + `<tr><td style="padding-left:16px;font-weight:600">Utilities Total</td><td style="font-weight:600">$${totalUtilities.toFixed(2)}</td><td>${pct(totalUtilities)}%</td></tr>`; return `<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`}).join("")}<tr class="subtotal"><td>Total Operating</td><td>$${totalOperating.toFixed(2)}</td><td>${pct(totalOperating)}%</td></tr></table>
     <table><tr class="net"><td>Net Profit</td><td class="${netProfit>=0?'pos':'neg'}">$${netProfit.toFixed(2)}</td><td class="${netProfit>=0?'pos':'neg'}">${pct(netProfit)}%</td></tr></table>
     <div class="footer">OwnersHQ P&L Report — ${new Date().toLocaleDateString()}</div><script>window.onload=function(){window.print()}</script></body></html>`);
     win.document.close();
@@ -1227,7 +1240,27 @@ function PnLReports() {
         {/* Operating */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Operating Expenses</div>
         {renderRow("Rent", "operating", "rent")}
-        {renderRow("Utilities", "operating", "utilities")}
+        {/* Utilities breakdown */}
+        <div style={{ padding: "8px 0 4px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#f59e0b", letterSpacing: 0.5 }}>UTILITIES — ${totalUtilities.toFixed(0)} total ({pct(totalUtilities)}%)</span>
+            <button onClick={() => setShowAddUtility(!showAddUtility)} style={{ all: "unset", cursor: "pointer", fontSize: 11, color: "#00e5a0", fontFamily: "inherit" }}>{showAddUtility ? "cancel" : "+ Add utility"}</button>
+          </div>
+          {showAddUtility && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input value={newUtilityName} onChange={e => setNewUtilityName(e.target.value)} placeholder="Utility name..." style={{ ...IS, textAlign: "left", flex: 1, padding: "6px 10px", fontSize: 12 }}/>
+              <button onClick={addUtility} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#00e5a0", color: "#080c16", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
+            </div>
+          )}
+          {utilities.map(u => (
+            <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px 24px", gap: 10, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+              <span style={{ fontSize: 12, color: "var(--secondary)", paddingLeft: 12 }}>{u.name}</span>
+              <input defaultValue={u.amount} onBlur={e => updateUtility(u.id, e.target.value)} style={{ ...IS, padding: "6px 10px", fontSize: 12 }}/>
+              <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{pct(parseFloat(u.amount) || 0)}%</span>
+              <button onClick={() => deleteUtility(u.id)} style={{ all: "unset", cursor: "pointer", color: "var(--muted)", fontSize: 12, opacity: 0.3, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.3}>×</button>
+            </div>
+          ))}
+        </div>
         {renderRow("Insurance", "operating", "insurance")}
         {renderRow("Marketing / Ads", "operating", "marketing")}
         {renderRow("Repairs & Maintenance", "operating", "repairs")}
