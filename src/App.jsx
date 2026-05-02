@@ -1117,11 +1117,17 @@ function PnLReports() {
   const IS = { width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "var(--primary)", fontSize: 13, fontFamily: "inherit", outline: "none", textAlign: "right" };
   const VTAB = (active) => ({ all: "unset", cursor: "pointer", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: active ? "rgba(244,114,182,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#f472b6" : "var(--muted)", border: active ? "1px solid rgba(244,114,182,0.2)" : "1px solid var(--border)" });
 
-  const Row = ({ label, section, field, bold, color }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-      <span style={{ fontSize: 13, color: "var(--secondary)", fontWeight: bold ? 600 : 400, paddingLeft: bold ? 0 : 16 }}>{label}</span>
-      <input value={data[section][field]} onChange={e => updateField(section, field, e.target.value)} style={IS}/>
-      <span style={{ fontSize: 12, color: color || "var(--muted)", textAlign: "right" }}>{pct(parseFloat(data[section][field]) || 0)}%</span>
+  const rowStyle = { display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" };
+  const renderRow = (label, section, field) => (
+    <div key={`${section}-${field}`} style={rowStyle}>
+      <span style={{ fontSize: 13, color: "var(--secondary)", paddingLeft: 16 }}>{label}</span>
+      <input
+        key={`input-${section}-${field}`}
+        defaultValue={data[section][field]}
+        onBlur={e => updateField(section, field, e.target.value)}
+        style={IS}
+      />
+      <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>{pct(parseFloat(data[section][field]) || 0)}%</span>
     </div>
   );
 
@@ -1194,17 +1200,17 @@ function PnLReports() {
 
         {/* Revenue */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#f472b6", letterSpacing: 0.5, textTransform: "uppercase", padding: "10px 0 4px" }}>Revenue</div>
-        <Row label="Food Sales" section="revenue" field="food"/>
-        <Row label="Beverage Sales" section="revenue" field="beverage"/>
-        <Row label="Catering" section="revenue" field="catering"/>
-        <Row label="Other" section="revenue" field="other"/>
+        {renderRow("Food Sales", "revenue", "food")}
+        {renderRow("Beverage Sales", "revenue", "beverage")}
+        {renderRow("Catering", "revenue", "catering")}
+        {renderRow("Other", "revenue", "other")}
         <TotalRow label="Total Revenue" value={totalRevenue} border/>
 
         {/* COGS */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Cost of Goods Sold</div>
-        <Row label="Food Cost" section="cogs" field="food"/>
-        <Row label="Beverage Cost" section="cogs" field="beverage"/>
-        <Row label="Paper & Supplies" section="cogs" field="paper"/>
+        {renderRow("Food Cost", "cogs", "food")}
+        {renderRow("Beverage Cost", "cogs", "beverage")}
+        {renderRow("Paper & Supplies", "cogs", "paper")}
         <TotalRow label="Total COGS" value={totalCogs} color="#f59e0b" border/>
 
         {/* Gross Profit */}
@@ -1212,22 +1218,22 @@ function PnLReports() {
 
         {/* Labor */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Labor</div>
-        <Row label="Salary / Management" section="labor" field="salary"/>
-        <Row label="Hourly Wages" section="labor" field="hourly"/>
-        <Row label="Payroll Tax" section="labor" field="payrollTax"/>
-        <Row label="Benefits" section="labor" field="benefits"/>
+        {renderRow("Salary / Management", "labor", "salary")}
+        {renderRow("Hourly Wages", "labor", "hourly")}
+        {renderRow("Payroll Tax", "labor", "payrollTax")}
+        {renderRow("Benefits", "labor", "benefits")}
         <TotalRow label="Total Labor" value={totalLabor} color="#60a5fa" border/>
 
         {/* Operating */}
         <div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Operating Expenses</div>
-        <Row label="Rent" section="operating" field="rent"/>
-        <Row label="Utilities" section="operating" field="utilities"/>
-        <Row label="Insurance" section="operating" field="insurance"/>
-        <Row label="Marketing / Ads" section="operating" field="marketing"/>
-        <Row label="Repairs & Maintenance" section="operating" field="repairs"/>
-        <Row label="Supplies" section="operating" field="supplies"/>
-        <Row label="Tech / Software" section="operating" field="tech"/>
-        <Row label="Miscellaneous" section="operating" field="misc"/>
+        {renderRow("Rent", "operating", "rent")}
+        {renderRow("Utilities", "operating", "utilities")}
+        {renderRow("Insurance", "operating", "insurance")}
+        {renderRow("Marketing / Ads", "operating", "marketing")}
+        {renderRow("Repairs & Maintenance", "operating", "repairs")}
+        {renderRow("Supplies", "operating", "supplies")}
+        {renderRow("Tech / Software", "operating", "tech")}
+        {renderRow("Miscellaneous", "operating", "misc")}
         <TotalRow label="Total Operating" value={totalOperating} color="#a78bfa" border/>
 
         {/* Net Profit */}
