@@ -1638,41 +1638,53 @@ export default function OwnersHQDashboard() {
     setMounted(true);
     const loadMoe = async () => {
       try {
-        const itemData = await sbRead("tommys", "itemdata");
+        const addedData = await sbRead("tommys", "added");
         const stockData = await sbRead("tommys", "stock");
-        if (itemData) {
-          // Parse MOE's itemdata format into our ingredients array
+        const itemData = await sbRead("tommys", "itemdata");
+        
+        if (addedData && typeof addedData === "object") {
           const parsed = [];
-          if (typeof itemData === "object") {
-            Object.entries(itemData).forEach(([key, item]) => {
-              if (item && typeof item === "object") {
+          // addedData is organized by section name, each containing an array of items
+          Object.entries(addedData).forEach(([sectionName, items]) => {
+            if (Array.isArray(items)) {
+              items.forEach(item => {
+                if (!item || !item.name) return;
+                // Get any overrides from itemdata
+                const overrides = itemData?.[String(item.id)] || {};
+                const stockLevel = stockData?.[String(item.id)] ?? 0;
                 parsed.push({
-                  id: `moe-${key}`,
-                  name: item.name || item.label || key,
-                  vendor: item.vendor || item.supplier || "",
-                  purchasePrice: String(item.price || item.purchasePrice || item.cost || "0"),
-                  unitsPerCase: item.unitsPerCase || item.caseCount || item.perCase || 1,
-                  unitType: item.unit || item.unitType || item.size || "each",
-                  costPerUnit: String(item.costPerUnit || item.unitCost || "0"),
-                  category: item.category || item.section || "",
-                  stock: stockData?.[key] ?? 0,
-                  reorderAt: item.reorderAt || item.reorder || 5,
+                  id: `moe-${item.id}`,
+                  name: item.name,
+                  vendor: overrides.supplier || item.supplier || "",
+                  purchasePrice: String(item.price || item.purchasePrice || "0"),
+                  unitsPerCase: item.upu || overrides.upu || 1,
+                  unitType: item.order_unit || overrides.order_unit || "each",
+                  costPerUnit: String(item.costPerUnit || "0"),
+                  category: sectionName.replace(/[\u{1F300}-\u{1FAD6}]/gu, "").trim(),
+                  stock: typeof stockLevel === "object" ? stockLevel.qty || 0 : stockLevel,
+                  reorderAt: overrides.reorder || item.reorder || 5,
+                  maxStock: overrides.max_stock || item.max_stock || 10,
+                  hidden: overrides._hidden || false,
                   source: "moe",
                 });
-              }
-            });
-          }
+              });
+            }
+          });
           if (parsed.length > 0) {
-            setIngredients(parsed);
+            setIngredients(parsed.filter(i => !i.hidden));
             setMoeStatus("connected");
+            console.log(`MOE: Loaded ${parsed.length} items from Supabase`);
           } else {
             setMoeStatus("fallback");
+            console.log("MOE: No items found in added data, using mock");
           }
         } else {
           setMoeStatus("fallback");
+          console.log("MOE: Could not read added data, using mock");
         }
-      } catch {
+      } catch (e) {
         setMoeStatus("fallback");
+        console.log("MOE: Connection error, using mock", e);
       }
     };
     loadMoe();
@@ -1756,7 +1768,12 @@ export default function OwnersHQDashboard() {
         {/* Content */}
         <div style={{ flex: 1, overflow: "auto", padding: "28px 32px" }}>
           <div style={{ marginBottom: 28, animation: "slideX 0.35s ease" }}>
-            <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>{currentMod?.label || "Overview"}</h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>{currentMod?.label || "Overview"}</h1>
+              {moeStatus === "connected" && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 6, background: "rgba(0,229,160,0.1)", color: "#00e5a0", letterSpacing: 0.5 }}>MOE CONNECTED</span>}
+              {moeStatus === "fallback" && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 6, background: "rgba(245,158,11,0.1)", color: "#f59e0b", letterSpacing: 0.5 }}>MOE MOCK DATA</span>}
+              {moeStatus === "loading" && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.3)", letterSpacing: 0.5 }}>CONNECTING...</span>}
+            </div>
             {active === "overview" && <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>Business health, action items, and what's happening across your restaurant.</p>}
           </div>
 
