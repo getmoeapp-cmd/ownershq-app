@@ -1095,30 +1095,46 @@ function PnLReports() {
   const [selectedMonth, setSelectedMonth] = useState("2025-03");
   const [selectedDay, setSelectedDay] = useState("2025-04-05");
 
-  // Sample data structure — will be manual entry, stored in Supabase later
+  // Each field has amount (what you actually pay) and freq (weekly/monthly/annual)
+  // The system auto-converts to match the current period view
   const [data, setData] = useState({
-    revenue: { food: "12450", beverage: "3200", catering: "1800", other: "350" },
-    cogs: { food: "3890", beverage: "820", paper: "310" },
-    labor: { salary: "4200", hourly: "2800", payrollTax: "630", benefits: "420" },
-    operating: { rent: "3500", insurance: "450", marketing: "500", repairs: "200", supplies: "320", tech: "150", misc: "180" },
+    revenue: { food: { amount: "12450", freq: "weekly" }, beverage: { amount: "3200", freq: "weekly" }, catering: { amount: "1800", freq: "weekly" }, other: { amount: "350", freq: "weekly" } },
+    cogs: { food: { amount: "3890", freq: "weekly" }, beverage: { amount: "820", freq: "weekly" }, paper: { amount: "310", freq: "weekly" } },
+    labor: { salary: { amount: "4200", freq: "monthly" }, hourly: { amount: "2800", freq: "weekly" }, payrollTax: { amount: "630", freq: "monthly" }, benefits: { amount: "420", freq: "monthly" } },
+    operating: { rent: { amount: "3500", freq: "monthly" }, insurance: { amount: "450", freq: "monthly" }, marketing: { amount: "500", freq: "monthly" }, repairs: { amount: "200", freq: "monthly" }, supplies: { amount: "320", freq: "monthly" }, tech: { amount: "150", freq: "monthly" }, misc: { amount: "180", freq: "monthly" } },
   });
   const [utilities, setUtilities] = useState([
-    { id: "u1", name: "Electric", amount: "280" },
-    { id: "u2", name: "Gas", amount: "150" },
-    { id: "u3", name: "Water", amount: "85" },
-    { id: "u4", name: "Phone / Internet", amount: "120" },
-    { id: "u5", name: "Garbage / Waste", amount: "45" },
+    { id: "u1", name: "Electric", amount: "280", freq: "monthly" },
+    { id: "u2", name: "Gas", amount: "150", freq: "monthly" },
+    { id: "u3", name: "Water", amount: "85", freq: "monthly" },
+    { id: "u4", name: "Phone / Internet", amount: "120", freq: "monthly" },
+    { id: "u5", name: "Garbage / Waste", amount: "45", freq: "monthly" },
   ]);
   const [showAddUtility, setShowAddUtility] = useState(false);
   const [newUtilityName, setNewUtilityName] = useState("");
 
-  const updateField = (section, field, value) => setData(d => ({ ...d, [section]: { ...d[section], [field]: value } }));
-  const updateUtility = (id, value) => setUtilities(us => us.map(u => u.id === id ? { ...u, amount: value } : u));
-  const addUtility = () => { if (!newUtilityName.trim()) return; setUtilities(us => [...us, { id: `u${Date.now()}`, name: newUtilityName, amount: "0" }]); setNewUtilityName(""); setShowAddUtility(false); };
-  const deleteUtility = (id) => setUtilities(us => us.filter(u => u.id !== id));
-  const totalUtilities = utilities.reduce((s, u) => s + (parseFloat(u.amount) || 0), 0);
+  // Conversion multipliers: convert FROM a frequency TO the current period view
+  const toMultiplier = (fromFreq) => {
+    const conv = {
+      daily: { daily: 1, weekly: 1/7, monthly: 1/30.44, annual: 1/365 },
+      weekly: { daily: 7, weekly: 1, monthly: 7/30.44, annual: 7/365 },
+      monthly: { daily: 30.44, weekly: 30.44/7, monthly: 1, annual: 1/12 },
+      annual: { daily: 365, weekly: 365/7, monthly: 12, annual: 1 },
+    };
+    return conv[period]?.[fromFreq] || 1;
+  };
 
-  const sum = (section) => Object.values(data[section]).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const getConverted = (amount, freq) => (parseFloat(amount) || 0) * toMultiplier(freq);
+
+  const updateField = (section, field, value) => setData(d => ({ ...d, [section]: { ...d[section], [field]: { ...d[section][field], amount: value } } }));
+  const updateFreq = (section, field, freq) => setData(d => ({ ...d, [section]: { ...d[section], [field]: { ...d[section][field], freq } } }));
+  const updateUtility = (id, value) => setUtilities(us => us.map(u => u.id === id ? { ...u, amount: value } : u));
+  const updateUtilityFreq = (id, freq) => setUtilities(us => us.map(u => u.id === id ? { ...u, freq } : u));
+  const addUtility = () => { if (!newUtilityName.trim()) return; setUtilities(us => [...us, { id: `u${Date.now()}`, name: newUtilityName, amount: "0", freq: "monthly" }]); setNewUtilityName(""); setShowAddUtility(false); };
+  const deleteUtility = (id) => setUtilities(us => us.filter(u => u.id !== id));
+  const totalUtilities = utilities.reduce((s, u) => s + getConverted(u.amount, u.freq), 0);
+
+  const sum = (section) => Object.values(data[section]).reduce((s, f) => s + getConverted(f.amount, f.freq), 0);
   const totalRevenue = sum("revenue");
   const totalCogs = sum("cogs");
   const grossProfit = totalRevenue - totalCogs;
@@ -1128,26 +1144,32 @@ function PnLReports() {
   const pct = (v) => totalRevenue > 0 ? (v / totalRevenue * 100).toFixed(1) : "0.0";
 
   const IS = { width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "var(--primary)", fontSize: 13, fontFamily: "inherit", outline: "none", textAlign: "right" };
+  const FREQ = { padding: "4px 6px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", fontSize: 10, fontFamily: "inherit", outline: "none", cursor: "pointer" };
   const VTAB = (active) => ({ all: "unset", cursor: "pointer", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: active ? "rgba(244,114,182,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#f472b6" : "var(--muted)", border: active ? "1px solid rgba(244,114,182,0.2)" : "1px solid var(--border)" });
 
-  const rowStyle = { display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" };
-  const renderRow = (label, section, field) => (
-    <div key={`${section}-${field}`} style={rowStyle}>
-      <span style={{ fontSize: 13, color: "var(--secondary)", paddingLeft: 16 }}>{label}</span>
-      <input
-        key={`input-${section}-${field}`}
-        defaultValue={data[section][field]}
-        onBlur={e => updateField(section, field, e.target.value)}
-        style={IS}
-      />
-      <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>{pct(parseFloat(data[section][field]) || 0)}%</span>
-    </div>
-  );
+  const periodLabel = period === "daily" ? "/day" : period === "weekly" ? "/wk" : period === "monthly" ? "/mo" : "/yr";
+
+  const rowStyle = { display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" };
+  const renderRow = (label, section, field) => {
+    const f = data[section][field];
+    const converted = getConverted(f.amount, f.freq);
+    return (
+      <div key={`${section}-${field}`} style={rowStyle}>
+        <span style={{ fontSize: 13, color: "var(--secondary)", paddingLeft: 16 }}>{label}</span>
+        <input key={`input-${section}-${field}`} defaultValue={f.amount} onBlur={e => updateField(section, field, e.target.value)} style={IS}/>
+        <select value={f.freq} onChange={e => updateFreq(section, field, e.target.value)} style={FREQ}><option value="weekly">wk</option><option value="monthly">mo</option><option value="annual">yr</option></select>
+        <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
+        <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>{pct(converted)}%</span>
+      </div>
+    );
+  };
 
   const TotalRow = ({ label, value, color, border }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, alignItems: "center", padding: "10px 0", borderTop: border ? "2px solid rgba(255,255,255,0.1)" : "none", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "10px 0", borderTop: border ? "2px solid rgba(255,255,255,0.1)" : "none", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
       <span style={{ fontSize: 14, fontWeight: 700, color: color || "var(--primary)" }}>{label}</span>
-      <span style={{ fontSize: 14, fontWeight: 700, color: color || "var(--primary)", textAlign: "right" }}>${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+      <span style={{ fontSize: 14, fontWeight: 700, color: color || "var(--primary)", textAlign: "right" }}>${value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+      <span></span>
+      <span style={{ fontSize: 11, color: color || "var(--muted)", textAlign: "right" }}>{periodLabel}</span>
       <span style={{ fontSize: 12, fontWeight: 600, color: color || "var(--muted)", textAlign: "right" }}>{pct(value)}%</span>
     </div>
   );
@@ -1205,9 +1227,11 @@ function PnLReports() {
       {/* P&L Detail */}
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "20px 24px" }}>
         {/* Header */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, padding: "0 0 8px", borderBottom: "2px solid rgba(255,255,255,0.1)", marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, padding: "0 0 8px", borderBottom: "2px solid rgba(255,255,255,0.1)", marginBottom: 8 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Category</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>Amount ($)</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>Amount</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Freq</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>{period}</span>
           <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>% Rev</span>
         </div>
 
@@ -1243,7 +1267,7 @@ function PnLReports() {
         {/* Utilities breakdown */}
         <div style={{ padding: "8px 0 4px 16px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#f59e0b", letterSpacing: 0.5 }}>UTILITIES — ${totalUtilities.toFixed(0)} total ({pct(totalUtilities)}%)</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#f59e0b", letterSpacing: 0.5 }}>UTILITIES — ${totalUtilities.toFixed(0)}{periodLabel} ({pct(totalUtilities)}%)</span>
             <button onClick={() => setShowAddUtility(!showAddUtility)} style={{ all: "unset", cursor: "pointer", fontSize: 11, color: "#00e5a0", fontFamily: "inherit" }}>{showAddUtility ? "cancel" : "+ Add utility"}</button>
           </div>
           {showAddUtility && (
@@ -1252,14 +1276,19 @@ function PnLReports() {
               <button onClick={addUtility} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#00e5a0", color: "#080c16", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
             </div>
           )}
-          {utilities.map(u => (
-            <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px 24px", gap: 10, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-              <span style={{ fontSize: 12, color: "var(--secondary)", paddingLeft: 12 }}>{u.name}</span>
-              <input defaultValue={u.amount} onBlur={e => updateUtility(u.id, e.target.value)} style={{ ...IS, padding: "6px 10px", fontSize: 12 }}/>
-              <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{pct(parseFloat(u.amount) || 0)}%</span>
-              <button onClick={() => deleteUtility(u.id)} style={{ all: "unset", cursor: "pointer", color: "var(--muted)", fontSize: 12, opacity: 0.3, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.3}>×</button>
-            </div>
-          ))}
+          {utilities.map(u => {
+            const converted = getConverted(u.amount, u.freq);
+            return (
+              <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 100px 60px 60px 60px 24px", gap: 6, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                <span style={{ fontSize: 12, color: "var(--secondary)", paddingLeft: 12 }}>{u.name}</span>
+                <input defaultValue={u.amount} onBlur={e => updateUtility(u.id, e.target.value)} style={{ ...IS, padding: "6px 10px", fontSize: 12 }}/>
+                <select value={u.freq} onChange={e => updateUtilityFreq(u.id, e.target.value)} style={FREQ}><option value="weekly">wk</option><option value="monthly">mo</option><option value="annual">yr</option></select>
+                <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
+                <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{pct(converted)}%</span>
+                <button onClick={() => deleteUtility(u.id)} style={{ all: "unset", cursor: "pointer", color: "var(--muted)", fontSize: 12, opacity: 0.3, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.3}>×</button>
+              </div>
+            );
+          })}
         </div>
         {renderRow("Insurance", "operating", "insurance")}
         {renderRow("Marketing / Ads", "operating", "marketing")}
@@ -1270,9 +1299,11 @@ function PnLReports() {
         <TotalRow label="Total Operating" value={totalOperating} color="#a78bfa" border/>
 
         {/* Net Profit */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px", gap: 10, alignItems: "center", padding: "14px 0", borderTop: "3px solid rgba(255,255,255,0.15)", marginTop: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "14px 0", borderTop: "3px solid rgba(255,255,255,0.15)", marginTop: 8 }}>
           <span style={{ fontSize: 18, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444" }}>NET PROFIT</span>
-          <span style={{ fontSize: 18, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>${netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>${netProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <span></span>
+          <span style={{ fontSize: 12, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{periodLabel}</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{pct(netProfit)}%</span>
         </div>
       </div>
