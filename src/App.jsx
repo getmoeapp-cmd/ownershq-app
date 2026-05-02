@@ -1089,101 +1089,161 @@ function PrepCosting({ categories, setCategories, ingredients, setIngredients, p
 }
 
 // ─── P&L REPORTS MODULE ──────────────────────────────────────
+// ─── P&L REPORTS MODULE ──────────────────────────────────────
 function PnLReports() {
-  const [period, setPeriod] = useState("weekly"); // daily | weekly | monthly
+  const [period, setPeriod] = useState("weekly");
   const [selectedWeek, setSelectedWeek] = useState("2025-W14");
   const [selectedMonth, setSelectedMonth] = useState("2025-03");
   const [selectedDay, setSelectedDay] = useState("2025-04-05");
 
-  // Each field has amount (what you actually pay) and freq (weekly/monthly/annual)
-  // The system auto-converts to match the current period view
-  const [data, setData] = useState({
-    revenue: { food: { amount: "12450", freq: "weekly" }, beverage: { amount: "3200", freq: "weekly" }, catering: { amount: "1800", freq: "weekly" }, other: { amount: "350", freq: "weekly" } },
-    cogs: { food: { amount: "3890", freq: "weekly" }, beverage: { amount: "820", freq: "weekly" }, paper: { amount: "310", freq: "weekly" } },
-    labor: { salary: { amount: "4200", freq: "monthly" }, hourly: { amount: "2800", freq: "weekly" }, payrollTax: { amount: "630", freq: "monthly" }, benefits: { amount: "420", freq: "monthly" } },
-    operating: { rent: { amount: "3500", freq: "monthly" }, insurance: { amount: "450", freq: "monthly" }, marketing: { amount: "500", freq: "monthly" }, repairs: { amount: "200", freq: "monthly" }, supplies: { amount: "320", freq: "monthly" }, tech: { amount: "150", freq: "monthly" }, misc: { amount: "180", freq: "monthly" } },
+  // Fully dynamic — every section is an array of { id, name, amount, freq }
+  const [sections, setSections] = useState({
+    revenue: [
+      { id: "r1", name: "Food Sales", amount: "12450", freq: "weekly" },
+      { id: "r2", name: "Beverage Sales", amount: "3200", freq: "weekly" },
+      { id: "r3", name: "Catering", amount: "1800", freq: "weekly" },
+      { id: "r4", name: "Other", amount: "350", freq: "weekly" },
+    ],
+    cogs: [
+      { id: "c1", name: "Food Cost", amount: "3890", freq: "weekly" },
+      { id: "c2", name: "Beverage Cost", amount: "820", freq: "weekly" },
+      { id: "c3", name: "Paper & Supplies", amount: "310", freq: "weekly" },
+    ],
+    labor: [
+      { id: "l1", name: "Salary / Management", amount: "4200", freq: "monthly" },
+      { id: "l2", name: "Hourly Wages", amount: "2800", freq: "weekly" },
+      { id: "l3", name: "Payroll Tax", amount: "630", freq: "monthly" },
+      { id: "l4", name: "Benefits", amount: "420", freq: "monthly" },
+    ],
+    operating: [
+      { id: "o1", name: "Rent", amount: "3500", freq: "monthly" },
+      { id: "o2", name: "Insurance", amount: "450", freq: "monthly" },
+      { id: "o3", name: "Marketing / Ads", amount: "500", freq: "monthly" },
+      { id: "o4", name: "Repairs & Maintenance", amount: "200", freq: "monthly" },
+      { id: "o5", name: "Supplies", amount: "320", freq: "monthly" },
+      { id: "o6", name: "Tech / Software", amount: "150", freq: "monthly" },
+      { id: "o7", name: "Miscellaneous", amount: "180", freq: "monthly" },
+    ],
+    utilities: [
+      { id: "u1", name: "Electric", amount: "280", freq: "monthly" },
+      { id: "u2", name: "Gas", amount: "150", freq: "monthly" },
+      { id: "u3", name: "Water", amount: "85", freq: "monthly" },
+      { id: "u4", name: "Phone / Internet", amount: "120", freq: "monthly" },
+      { id: "u5", name: "Garbage / Waste", amount: "45", freq: "monthly" },
+    ],
   });
-  const [utilities, setUtilities] = useState([
-    { id: "u1", name: "Electric", amount: "280", freq: "monthly" },
-    { id: "u2", name: "Gas", amount: "150", freq: "monthly" },
-    { id: "u3", name: "Water", amount: "85", freq: "monthly" },
-    { id: "u4", name: "Phone / Internet", amount: "120", freq: "monthly" },
-    { id: "u5", name: "Garbage / Waste", amount: "45", freq: "monthly" },
-  ]);
-  const [showAddUtility, setShowAddUtility] = useState(false);
-  const [newUtilityName, setNewUtilityName] = useState("");
+  const [adding, setAdding] = useState(null); // which section is being added to
+  const [newName, setNewName] = useState("");
+  const [editingName, setEditingName] = useState(null);
 
-  // Conversion multipliers: convert FROM a frequency TO the current period view
+  // Conversion
   const toMultiplier = (fromFreq) => {
     const conv = {
-      daily: { daily: 1, weekly: 1/7, monthly: 1/30.44, annual: 1/365 },
-      weekly: { daily: 7, weekly: 1, monthly: 7/30.44, annual: 7/365 },
+      daily:   { daily: 1, weekly: 1/7, monthly: 1/30.44, annual: 1/365 },
+      weekly:  { daily: 7, weekly: 1, monthly: 7/30.44, annual: 7/365 },
       monthly: { daily: 30.44, weekly: 30.44/7, monthly: 1, annual: 1/12 },
-      annual: { daily: 365, weekly: 365/7, monthly: 12, annual: 1 },
+      annual:  { daily: 365, weekly: 365/7, monthly: 12, annual: 1 },
     };
     return conv[period]?.[fromFreq] || 1;
   };
+  const convert = (amount, freq) => (parseFloat(amount) || 0) * toMultiplier(freq);
 
-  const getConverted = (amount, freq) => (parseFloat(amount) || 0) * toMultiplier(freq);
+  // CRUD
+  const updateItem = (section, id, field, value) => setSections(s => ({ ...s, [section]: s[section].map(i => i.id === id ? { ...i, [field]: value } : i) }));
+  const deleteItem = (section, id) => setSections(s => ({ ...s, [section]: s[section].filter(i => i.id !== id) }));
+  const addItem = (section) => {
+    if (!newName.trim()) return;
+    const id = `${section[0]}${Date.now()}`;
+    const freq = ["revenue", "cogs"].includes(section) ? "weekly" : "monthly";
+    setSections(s => ({ ...s, [section]: [...s[section], { id, name: newName.trim(), amount: "0", freq }] }));
+    setNewName(""); setAdding(null);
+  };
 
-  const updateField = (section, field, value) => setData(d => ({ ...d, [section]: { ...d[section], [field]: { ...d[section][field], amount: value } } }));
-  const updateFreq = (section, field, freq) => setData(d => ({ ...d, [section]: { ...d[section], [field]: { ...d[section][field], freq } } }));
-  const updateUtility = (id, value) => setUtilities(us => us.map(u => u.id === id ? { ...u, amount: value } : u));
-  const updateUtilityFreq = (id, freq) => setUtilities(us => us.map(u => u.id === id ? { ...u, freq } : u));
-  const addUtility = () => { if (!newUtilityName.trim()) return; setUtilities(us => [...us, { id: `u${Date.now()}`, name: newUtilityName, amount: "0", freq: "monthly" }]); setNewUtilityName(""); setShowAddUtility(false); };
-  const deleteUtility = (id) => setUtilities(us => us.filter(u => u.id !== id));
-  const totalUtilities = utilities.reduce((s, u) => s + getConverted(u.amount, u.freq), 0);
-
-  const sum = (section) => Object.values(data[section]).reduce((s, f) => s + getConverted(f.amount, f.freq), 0);
-  const totalRevenue = sum("revenue");
-  const totalCogs = sum("cogs");
+  // Totals
+  const sectionTotal = (key) => sections[key].reduce((s, i) => s + convert(i.amount, i.freq), 0);
+  const totalRevenue = sectionTotal("revenue");
+  const totalCogs = sectionTotal("cogs");
   const grossProfit = totalRevenue - totalCogs;
-  const totalLabor = sum("labor");
-  const totalOperating = sum("operating") + totalUtilities;
+  const totalLabor = sectionTotal("labor");
+  const totalUtilities = sectionTotal("utilities");
+  const totalOperating = sectionTotal("operating") + totalUtilities;
   const netProfit = grossProfit - totalLabor - totalOperating;
   const pct = (v) => totalRevenue > 0 ? (v / totalRevenue * 100).toFixed(1) : "0.0";
-
-  const IS = { width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "var(--primary)", fontSize: 13, fontFamily: "inherit", outline: "none", textAlign: "right" };
-  const FREQ = { padding: "4px 6px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", fontSize: 10, fontFamily: "inherit", outline: "none", cursor: "pointer" };
-  const VTAB = (active) => ({ all: "unset", cursor: "pointer", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: active ? "rgba(244,114,182,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#f472b6" : "var(--muted)", border: active ? "1px solid rgba(244,114,182,0.2)" : "1px solid var(--border)" });
-
   const periodLabel = period === "daily" ? "/day" : period === "weekly" ? "/wk" : period === "monthly" ? "/mo" : "/yr";
 
-  const rowStyle = { display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" };
-  const renderRow = (label, section, field) => {
-    const f = data[section][field];
-    const converted = getConverted(f.amount, f.freq);
+  // Styles
+  const IS = { width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "#f0f2f5", fontSize: 13, fontFamily: "inherit", outline: "none", textAlign: "right" };
+  const FREQ = { padding: "4px 6px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: "#1a1f33", color: "#f0f2f5", fontSize: 10, fontFamily: "inherit", outline: "none", cursor: "pointer" };
+  const VTAB = (active) => ({ all: "unset", cursor: "pointer", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: active ? "rgba(244,114,182,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#f472b6" : "rgba(255,255,255,0.35)", border: active ? "1px solid rgba(244,114,182,0.2)" : "1px solid rgba(255,255,255,0.06)" });
+  const optStyle = { background: "#1a1f33", color: "#f0f2f5" };
+
+  const FreqSelect = ({ value, onChange }) => (
+    <select value={value} onChange={onChange} style={FREQ}>
+      <option value="weekly" style={optStyle}>wk</option>
+      <option value="monthly" style={optStyle}>mo</option>
+      <option value="annual" style={optStyle}>yr</option>
+    </select>
+  );
+
+  // Render a section
+  const renderSection = (key, label, color) => {
+    const items = sections[key];
+    const total = key === "operating" ? totalOperating : sectionTotal(key);
     return (
-      <div key={`${section}-${field}`} style={rowStyle}>
-        <span style={{ fontSize: 13, color: "var(--secondary)", paddingLeft: 16 }}>{label}</span>
-        <input key={`input-${section}-${field}`} defaultValue={f.amount} onBlur={e => updateField(section, field, e.target.value)} style={IS}/>
-        <select value={f.freq} onChange={e => updateFreq(section, field, e.target.value)} style={FREQ}><option value="weekly">wk</option><option value="monthly">mo</option><option value="annual">yr</option></select>
-        <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
-        <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>{pct(converted)}%</span>
-      </div>
+      <>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0 4px" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color, letterSpacing: 0.5, textTransform: "uppercase" }}>{label}</span>
+          <button onClick={() => { setAdding(adding === key ? null : key); setNewName(""); }} style={{ all: "unset", cursor: "pointer", fontSize: 11, color: "#00e5a0", fontFamily: "inherit" }}>{adding === key ? "cancel" : "+ Add"}</button>
+        </div>
+        {adding === key && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 6, paddingLeft: 16 }}>
+            <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addItem(key)} placeholder={`New ${label.toLowerCase()} item...`} style={{ ...IS, textAlign: "left", flex: 1, padding: "6px 10px", fontSize: 12 }} autoFocus/>
+            <button onClick={() => addItem(key)} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#00e5a0", color: "#080c16", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
+          </div>
+        )}
+        {items.map(item => {
+          const converted = convert(item.amount, item.freq);
+          return (
+            <div key={item.id} style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+              {editingName === item.id ? (
+                <input defaultValue={item.name} onBlur={e => { updateItem(key, item.id, "name", e.target.value); setEditingName(null); }} onKeyDown={e => { if (e.key === "Enter") { updateItem(key, item.id, "name", e.target.value); setEditingName(null); } }} style={{ ...IS, textAlign: "left", padding: "4px 8px", fontSize: 12, paddingLeft: 16 }} autoFocus/>
+              ) : (
+                <span onClick={() => setEditingName(item.id)} style={{ fontSize: 13, color: "rgba(255,255,255,0.65)", paddingLeft: 16, cursor: "pointer", borderBottom: "1px dashed rgba(255,255,255,0.1)" }}>{item.name}</span>
+              )}
+              <input defaultValue={item.amount} onBlur={e => updateItem(key, item.id, "amount", e.target.value)} style={IS}/>
+              <FreqSelect value={item.freq} onChange={e => updateItem(key, item.id, "freq", e.target.value)}/>
+              <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
+              <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", textAlign: "right" }}>{pct(converted)}%</span>
+              <button onClick={() => deleteItem(key, item.id)} style={{ all: "unset", cursor: "pointer", color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.2)"}>×</button>
+            </div>
+          );
+        })}
+        {key !== "operating" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "10px 0", borderTop: "2px solid rgba(255,255,255,0.1)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: color || "#f0f2f5" }}>Total {label}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: color || "#f0f2f5", textAlign: "right" }}>${total.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            <span></span>
+            <span style={{ fontSize: 11, color: color || "rgba(255,255,255,0.35)", textAlign: "right" }}>{periodLabel}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: color || "rgba(255,255,255,0.35)", textAlign: "right" }}>{pct(total)}%</span>
+            <span></span>
+          </div>
+        )}
+      </>
     );
   };
 
-  const TotalRow = ({ label, value, color, border }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "10px 0", borderTop: border ? "2px solid rgba(255,255,255,0.1)" : "none", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-      <span style={{ fontSize: 14, fontWeight: 700, color: color || "var(--primary)" }}>{label}</span>
-      <span style={{ fontSize: 14, fontWeight: 700, color: color || "var(--primary)", textAlign: "right" }}>${value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-      <span></span>
-      <span style={{ fontSize: 11, color: color || "var(--muted)", textAlign: "right" }}>{periodLabel}</span>
-      <span style={{ fontSize: 12, fontWeight: 600, color: color || "var(--muted)", textAlign: "right" }}>{pct(value)}%</span>
-    </div>
-  );
-
+  // Print
   const printPnL = () => {
-    const periodLabel = period === "daily" ? selectedDay : period === "weekly" ? `Week ${selectedWeek}` : selectedMonth;
+    const periodStr = period === "daily" ? selectedDay : period === "weekly" ? `Week ${selectedWeek}` : selectedMonth;
+    const printSection = (items, label) => items.map(i => `<tr><td style="padding-left:16px">${i.name}</td><td>$${convert(i.amount, i.freq).toFixed(2)}</td><td>${pct(convert(i.amount, i.freq))}%</td></tr>`).join("") + `<tr class="subtotal"><td>Total ${label}</td><td>$${items.reduce((s,i)=>s+convert(i.amount,i.freq),0).toFixed(2)}</td><td>${pct(items.reduce((s,i)=>s+convert(i.amount,i.freq),0))}%</td></tr>`;
     const win = window.open("", "_blank");
-    win.document.write(`<!DOCTYPE html><html><head><title>P&L - ${periodLabel}</title><style>@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{font-family:'DM Sans',sans-serif;padding:40px;max-width:700px;margin:0 auto;color:#1a1a1a}h1{font-size:24px;font-weight:700;margin-bottom:4px}h2{font-size:14px;font-weight:700;margin:20px 0 8px;text-transform:uppercase;letter-spacing:1px;color:#333;border-bottom:2px solid #ddd;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-bottom:8px}td{padding:5px 8px;font-size:13px;border-bottom:1px solid #f0f0f0}td:nth-child(2),td:nth-child(3){text-align:right;width:100px}tr.total td{font-weight:700;border-top:2px solid #333;font-size:14px}tr.subtotal td{font-weight:600;background:#f8f8f8}tr.net td{font-size:16px;font-weight:700}.pos{color:#16a34a}.neg{color:#dc2626}.footer{margin-top:30px;border-top:1px solid #ddd;padding-top:12px;font-size:11px;color:#aaa}@media print{body{padding:20px}}</style></head><body>
-    <h1>Profit & Loss Statement</h1><p style="color:#666;margin-bottom:20px">${periodLabel} — OwnersHQ</p>
-    <h2>Revenue</h2><table>${Object.entries(data.revenue).map(([k,v])=>`<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total Revenue</td><td>$${totalRevenue.toFixed(2)}</td><td>100%</td></tr></table>
-    <h2>Cost of Goods Sold</h2><table>${Object.entries(data.cogs).map(([k,v])=>`<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total COGS</td><td>$${totalCogs.toFixed(2)}</td><td>${pct(totalCogs)}%</td></tr></table>
+    win.document.write(`<!DOCTYPE html><html><head><title>P&L - ${periodStr}</title><style>@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{font-family:'DM Sans',sans-serif;padding:40px;max-width:700px;margin:0 auto;color:#1a1a1a}h1{font-size:24px;font-weight:700;margin-bottom:4px}h2{font-size:14px;font-weight:700;margin:20px 0 8px;text-transform:uppercase;letter-spacing:1px;color:#333;border-bottom:2px solid #ddd;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-bottom:8px}td{padding:5px 8px;font-size:13px;border-bottom:1px solid #f0f0f0}td:nth-child(2),td:nth-child(3){text-align:right;width:100px}tr.total td{font-weight:700;border-top:2px solid #333;font-size:14px}tr.subtotal td{font-weight:600;background:#f8f8f8}tr.net td{font-size:16px;font-weight:700}.pos{color:#16a34a}.neg{color:#dc2626}.footer{margin-top:30px;border-top:1px solid #ddd;padding-top:12px;font-size:11px;color:#aaa}@media print{body{padding:20px}}</style></head><body>
+    <h1>Profit & Loss Statement</h1><p style="color:#666;margin-bottom:20px">${periodStr} (${period}) — OwnersHQ</p>
+    <h2>Revenue</h2><table>${printSection(sections.revenue, "Revenue")}</table>
+    <h2>Cost of Goods Sold</h2><table>${printSection(sections.cogs, "COGS")}</table>
     <table><tr class="total"><td>Gross Profit</td><td>$${grossProfit.toFixed(2)}</td><td>${pct(grossProfit)}%</td></tr></table>
-    <h2>Labor</h2><table>${Object.entries(data.labor).map(([k,v])=>`<tr><td style="padding-left:16px">${k.replace(/([A-Z])/g,' $1').trim()}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`).join("")}<tr class="subtotal"><td>Total Labor</td><td>$${totalLabor.toFixed(2)}</td><td>${pct(totalLabor)}%</td></tr></table>
-    <h2>Operating Expenses</h2><table>${Object.entries(data.operating).map(([k,v])=>{if(k==='rent') return `<tr><td style="padding-left:16px">Rent</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>` + utilities.map(u=>`<tr><td style="padding-left:32px;color:#666">↳ ${u.name}</td><td>$${parseFloat(u.amount||0).toFixed(2)}</td><td>${pct(parseFloat(u.amount||0))}%</td></tr>`).join("") + `<tr><td style="padding-left:16px;font-weight:600">Utilities Total</td><td style="font-weight:600">$${totalUtilities.toFixed(2)}</td><td>${pct(totalUtilities)}%</td></tr>`; return `<tr><td style="padding-left:16px">${k.charAt(0).toUpperCase()+k.slice(1)}</td><td>$${parseFloat(v||0).toFixed(2)}</td><td>${pct(parseFloat(v||0))}%</td></tr>`}).join("")}<tr class="subtotal"><td>Total Operating</td><td>$${totalOperating.toFixed(2)}</td><td>${pct(totalOperating)}%</td></tr></table>
+    <h2>Labor</h2><table>${printSection(sections.labor, "Labor")}</table>
+    <h2>Operating Expenses</h2><table>${sections.operating.map(i => `<tr><td style="padding-left:16px">${i.name}</td><td>$${convert(i.amount, i.freq).toFixed(2)}</td><td>${pct(convert(i.amount, i.freq))}%</td></tr>`).join("")}${sections.utilities.map(u => `<tr><td style="padding-left:32px;color:#666">↳ ${u.name}</td><td>$${convert(u.amount,u.freq).toFixed(2)}</td><td>${pct(convert(u.amount,u.freq))}%</td></tr>`).join("")}<tr><td style="padding-left:16px;font-weight:600">Utilities Total</td><td style="font-weight:600">$${totalUtilities.toFixed(2)}</td><td>${pct(totalUtilities)}%</td></tr><tr class="subtotal"><td>Total Operating</td><td>$${totalOperating.toFixed(2)}</td><td>${pct(totalOperating)}%</td></tr></table>
     <table><tr class="net"><td>Net Profit</td><td class="${netProfit>=0?'pos':'neg'}">$${netProfit.toFixed(2)}</td><td class="${netProfit>=0?'pos':'neg'}">${pct(netProfit)}%</td></tr></table>
     <div class="footer">OwnersHQ P&L Report — ${new Date().toLocaleDateString()}</div><script>window.onload=function(){window.print()}</script></body></html>`);
     win.document.close();
@@ -1202,111 +1262,115 @@ function PnLReports() {
           {period === "daily" && <input type="date" value={selectedDay} onChange={e => setSelectedDay(e.target.value)} style={{ ...IS, textAlign: "left", width: 160 }}/>}
           {period === "weekly" && <input type="week" value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)} style={{ ...IS, textAlign: "left", width: 160 }}/>}
           {period === "monthly" && <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ ...IS, textAlign: "left", width: 160 }}/>}
-          <button onClick={printPnL} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#f472b6", color: "#080c16", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>🖨 Print P&L</button>
+          <button onClick={printPnL} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#f472b6", color: "#080c16", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>🖨 Print P&L</button>
         </div>
       </div>
 
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 24 }}>
         {[
-          { label: "Revenue", value: totalRevenue, color: "var(--primary)" },
+          { label: "Revenue", value: totalRevenue, color: "#f0f2f5" },
           { label: "COGS", value: totalCogs, color: "#f59e0b" },
           { label: "Gross Profit", value: grossProfit, color: grossProfit >= 0 ? "#00e5a0" : "#ef4444" },
           { label: "Labor", value: totalLabor, color: "#60a5fa" },
           { label: "Operating", value: totalOperating, color: "#a78bfa" },
           { label: "Net Profit", value: netProfit, color: netProfit >= 0 ? "#00e5a0" : "#ef4444" },
         ].map((c, i) => (
-          <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", marginBottom: 6 }}>{c.label}</div>
+          <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.35)", marginBottom: 6 }}>{c.label}</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: c.color, lineHeight: 1 }}>${c.value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>{pct(c.value)}% of revenue</div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 4 }}>{pct(c.value)}% of revenue · {periodLabel}</div>
           </div>
         ))}
       </div>
 
       {/* P&L Detail */}
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "20px 24px" }}>
+      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "20px 24px" }}>
         {/* Header */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, padding: "0 0 8px", borderBottom: "2px solid rgba(255,255,255,0.1)", marginBottom: 8 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Category</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>Amount</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Freq</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>{period}</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>% Rev</span>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, padding: "0 0 8px", borderBottom: "2px solid rgba(255,255,255,0.1)", marginBottom: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: 0.5, textTransform: "uppercase" }}>Category</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>Amount</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: 0.5, textTransform: "uppercase" }}>Freq</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>{period}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" }}>%</span>
+          <span></span>
         </div>
 
         {/* Revenue */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#f472b6", letterSpacing: 0.5, textTransform: "uppercase", padding: "10px 0 4px" }}>Revenue</div>
-        {renderRow("Food Sales", "revenue", "food")}
-        {renderRow("Beverage Sales", "revenue", "beverage")}
-        {renderRow("Catering", "revenue", "catering")}
-        {renderRow("Other", "revenue", "other")}
-        <TotalRow label="Total Revenue" value={totalRevenue} border/>
+        {renderSection("revenue", "Revenue", "#f472b6")}
 
         {/* COGS */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Cost of Goods Sold</div>
-        {renderRow("Food Cost", "cogs", "food")}
-        {renderRow("Beverage Cost", "cogs", "beverage")}
-        {renderRow("Paper & Supplies", "cogs", "paper")}
-        <TotalRow label="Total COGS" value={totalCogs} color="#f59e0b" border/>
+        {renderSection("cogs", "Cost of Goods Sold", "#f59e0b")}
 
         {/* Gross Profit */}
-        <TotalRow label="GROSS PROFIT" value={grossProfit} color={grossProfit >= 0 ? "#00e5a0" : "#ef4444"} border/>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "12px 0", borderTop: "2px solid rgba(255,255,255,0.1)", borderBottom: "2px solid rgba(255,255,255,0.1)", margin: "4px 0" }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: grossProfit >= 0 ? "#00e5a0" : "#ef4444" }}>GROSS PROFIT</span>
+          <span style={{ fontSize: 16, fontWeight: 700, color: grossProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>${grossProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <span></span>
+          <span style={{ fontSize: 11, color: grossProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{periodLabel}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: grossProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{pct(grossProfit)}%</span>
+          <span></span>
+        </div>
 
         {/* Labor */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Labor</div>
-        {renderRow("Salary / Management", "labor", "salary")}
-        {renderRow("Hourly Wages", "labor", "hourly")}
-        {renderRow("Payroll Tax", "labor", "payrollTax")}
-        {renderRow("Benefits", "labor", "benefits")}
-        <TotalRow label="Total Labor" value={totalLabor} color="#60a5fa" border/>
+        {renderSection("labor", "Labor", "#60a5fa")}
 
         {/* Operating */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa", letterSpacing: 0.5, textTransform: "uppercase", padding: "14px 0 4px" }}>Operating Expenses</div>
-        {renderRow("Rent", "operating", "rent")}
-        {/* Utilities breakdown */}
-        <div style={{ padding: "8px 0 4px 16px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#f59e0b", letterSpacing: 0.5 }}>UTILITIES — ${totalUtilities.toFixed(0)}{periodLabel} ({pct(totalUtilities)}%)</span>
-            <button onClick={() => setShowAddUtility(!showAddUtility)} style={{ all: "unset", cursor: "pointer", fontSize: 11, color: "#00e5a0", fontFamily: "inherit" }}>{showAddUtility ? "cancel" : "+ Add utility"}</button>
+        {renderSection("operating", "Operating Expenses", "#a78bfa")}
+
+        {/* Utilities sub-section inside Operating */}
+        <div style={{ padding: "4px 0 4px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#f59e0b", letterSpacing: 0.5 }}>UTILITIES — ${totalUtilities.toFixed(0)}{periodLabel} ({pct(totalUtilities)}%)</span>
+            <button onClick={() => { setAdding(adding === "utilities" ? null : "utilities"); setNewName(""); }} style={{ all: "unset", cursor: "pointer", fontSize: 11, color: "#00e5a0", fontFamily: "inherit" }}>{adding === "utilities" ? "cancel" : "+ Add"}</button>
           </div>
-          {showAddUtility && (
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input value={newUtilityName} onChange={e => setNewUtilityName(e.target.value)} placeholder="Utility name..." style={{ ...IS, textAlign: "left", flex: 1, padding: "6px 10px", fontSize: 12 }}/>
-              <button onClick={addUtility} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#00e5a0", color: "#080c16", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
+          {adding === "utilities" && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 6, paddingLeft: 12 }}>
+              <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addItem("utilities")} placeholder="Utility name..." style={{ ...IS, textAlign: "left", flex: 1, padding: "6px 10px", fontSize: 12 }} autoFocus/>
+              <button onClick={() => addItem("utilities")} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#00e5a0", color: "#080c16", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Add</button>
             </div>
           )}
-          {utilities.map(u => {
-            const converted = getConverted(u.amount, u.freq);
+          {sections.utilities.map(u => {
+            const converted = convert(u.amount, u.freq);
             return (
-              <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 100px 60px 60px 60px 24px", gap: 6, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-                <span style={{ fontSize: 12, color: "var(--secondary)", paddingLeft: 12 }}>{u.name}</span>
-                <input defaultValue={u.amount} onBlur={e => updateUtility(u.id, e.target.value)} style={{ ...IS, padding: "6px 10px", fontSize: 12 }}/>
-                <select value={u.freq} onChange={e => updateUtilityFreq(u.id, e.target.value)} style={FREQ}><option value="weekly">wk</option><option value="monthly">mo</option><option value="annual">yr</option></select>
-                <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
-                <span style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{pct(converted)}%</span>
-                <button onClick={() => deleteUtility(u.id)} style={{ all: "unset", cursor: "pointer", color: "var(--muted)", fontSize: 12, opacity: 0.3, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.3}>×</button>
+              <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 100px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                {editingName === u.id ? (
+                  <input defaultValue={u.name} onBlur={e => { updateItem("utilities", u.id, "name", e.target.value); setEditingName(null); }} onKeyDown={e => { if (e.key === "Enter") { updateItem("utilities", u.id, "name", e.target.value); setEditingName(null); }}} style={{ ...IS, textAlign: "left", padding: "4px 8px", fontSize: 11, paddingLeft: 12 }} autoFocus/>
+                ) : (
+                  <span onClick={() => setEditingName(u.id)} style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", paddingLeft: 12, cursor: "pointer", borderBottom: "1px dashed rgba(255,255,255,0.08)" }}>{u.name}</span>
+                )}
+                <input defaultValue={u.amount} onBlur={e => updateItem("utilities", u.id, "amount", e.target.value)} style={{ ...IS, padding: "6px 10px", fontSize: 12 }}/>
+                <FreqSelect value={u.freq} onChange={e => updateItem("utilities", u.id, "freq", e.target.value)}/>
+                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", textAlign: "right" }}>${converted.toFixed(0)}{periodLabel}</span>
+                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", textAlign: "right" }}>{pct(converted)}%</span>
+                <button onClick={() => deleteItem("utilities", u.id)} style={{ all: "unset", cursor: "pointer", color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }} onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.2)"}>×</button>
               </div>
             );
           })}
         </div>
-        {renderRow("Insurance", "operating", "insurance")}
-        {renderRow("Marketing / Ads", "operating", "marketing")}
-        {renderRow("Repairs & Maintenance", "operating", "repairs")}
-        {renderRow("Supplies", "operating", "supplies")}
-        {renderRow("Tech / Software", "operating", "tech")}
-        {renderRow("Miscellaneous", "operating", "misc")}
-        <TotalRow label="Total Operating" value={totalOperating} color="#a78bfa" border/>
+
+        {/* Total Operating (includes utilities) */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "10px 0", borderTop: "2px solid rgba(255,255,255,0.1)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa" }}>Total Operating</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa", textAlign: "right" }}>${totalOperating.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <span></span>
+          <span style={{ fontSize: 11, color: "#a78bfa", textAlign: "right" }}>{periodLabel}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#a78bfa", textAlign: "right" }}>{pct(totalOperating)}%</span>
+          <span></span>
+        </div>
 
         {/* Net Profit */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 70px 60px 80px", gap: 8, alignItems: "center", padding: "14px 0", borderTop: "3px solid rgba(255,255,255,0.15)", marginTop: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 60px 70px 60px 24px", gap: 6, alignItems: "center", padding: "14px 0", borderTop: "3px solid rgba(255,255,255,0.15)", marginTop: 8 }}>
           <span style={{ fontSize: 18, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444" }}>NET PROFIT</span>
           <span style={{ fontSize: 18, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>${netProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
           <span></span>
           <span style={{ fontSize: 12, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{periodLabel}</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: netProfit >= 0 ? "#00e5a0" : "#ef4444", textAlign: "right" }}>{pct(netProfit)}%</span>
+          <span></span>
         </div>
       </div>
+
+      <p style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 12 }}>Click any name to rename it. All amounts auto-convert to the selected period view.</p>
     </div>
   );
 }
