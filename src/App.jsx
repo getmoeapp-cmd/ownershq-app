@@ -1121,7 +1121,368 @@ function PrepCosting({ categories, setCategories, ingredients, setIngredients, p
   );
 }
 
-// ─── P&L REPORTS MODULE ──────────────────────────────────────
+// ─── MOE INVENTORY MODULE ────────────────────────────────────
+// ─── MOE INVENTORY MODULE (Owner View) ──────────────────────
+function MoeModule({ ingredients, setIngredients, moeStatus }) {
+  const [view, setView] = useState("inventory"); // inventory | orders | history | backend
+  const [inventory, setInventory] = useState([]);
+  const [stock, setStock] = useState({});
+  const [vendors, setVendors] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [flash, setFlash] = useState("");
+  const [search, setSearch] = useState("");
+
+  const showFlash = (msg) => { setFlash(msg); setTimeout(() => setFlash(""), 2000); };
+
+  // ── Load all MOE data from Supabase ──
+  useEffect(() => {
+    const load = async () => {
+      const [inv, st, vd, hi] = await Promise.all([
+        sbRead("tommys", "added"),
+        sbRead("tommys", "stock"),
+        sbRead("tommys", "vendors"),
+        sbRead("tommys", "history"),
+      ]);
+
+      // Parse inventory from "added" format: { "section": [items] }
+      if (inv && typeof inv === "object") {
+        const sections = Object.entries(inv).map(([section, items]) => ({
+          section,
+          items: Array.isArray(items) ? items.map(i => ({ ...i, id: i.id || Date.now() + Math.random() })) : [],
+        })).filter(s => s.items.length > 0);
+        setInventory(sections);
+      }
+      setStock(st || {});
+      setVendors(vd || []);
+      setHistory(hi || []);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  // ── Save helpers ──
+  const saveStock = async (newStock) => { setStock(newStock); await sbWrite("tommys", "stock", newStock); };
+  const saveHistory = async (newHist) => { setHistory(newHist); await sbWrite("tommys", "history", newHist); };
+  const saveInventory = async (newInv) => {
+    setInventory(newInv);
+    // Convert back to "added" format for Supabase
+    const added = {};
+    newInv.forEach(s => { added[s.section] = s.items; });
+    await sbWrite("tommys", "added", added);
+  };
+
+  // ── Stock helpers ──
+  const updateStock = (id, val) => {
+    const n = parseInt(val);
+    const newStock = { ...stock, [id]: isNaN(n) ? 0 : Math.max(0, n) };
+    setStock(newStock);
+    saveStock(newStock);
+  };
+
+  const getStatus = (item, s) => {
+    if (s >= (item.max_stock || 10)) return { label: "FULL", color: "#16a34a", bg: "rgba(22,163,106,0.1)" };
+    if (s >= (item.reorder || 1)) return { label: "OK", color: "#22c55e", bg: "rgba(34,197,94,0.1)" };
+    if (s > 0) return { label: "LOW", color: "#f59e0b", bg: "rgba(245,158,11,0.1)" };
+    return { label: "EMPTY", color: "#ef4444", bg: "rgba(239,68,68,0.1)" };
+  };
+
+  const calcOrderQty = (item, s) => {
+    if (s >= (item.reorder || 1)) return 0;
+    return Math.ceil(Math.max(0, (item.max_stock || 10) - s) / Math.max(1, item.upu || 1));
+  };
+
+  // ── Flat items list ──
+  const allItems = inventory.flatMap(s => s.items.map(i => ({ ...i, section: s.section })));
+  const lowStockItems = allItems.filter(i => (stock[i.id] ?? 0) <= (i.reorder || 1));
+
+  // ── Submit order for a vendor ──
+  const submitOrder = (vendorName) => {
+    const vendorItems = allItems.filter(i => (i.vendor || i.supplier || "").trim().toLowerCase() === vendorName.toLowerCase());
+    const orderLines = vendorItems.map(item => ({
+      id: item.id, name: item.name, section: item.section,
+      order_unit: item.order_unit, vendor: vendorName,
+      qty: calcOrderQty(item, stock[item.id] ?? 0),
+      currentStock: stock[item.id] ?? 0,
+    })).filter(l => l.qty > 0);
+    if (orderLines.length === 0) return;
+
+    const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    const getWeekNumber = () => { const d = new Date(); d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7)); const ys = new Date(Date.UTC(d.getUTCFullYear(), 0, 1)); return Math.ceil((((d - ys) / 86400000) + 1) / 7); };
+
+    const entry = {
+      id: `ord_${Date.now()}`, vendor: vendorName,
+      weekNumber: getWeekNumber(), year: new Date().getFullYear(),
+      day: DAYS[new Date().getDay()], date: new Date().toISOString(),
+      lines: orderLines, totalItems: orderLines.length, orderedBy: "Owner",
+    };
+    const newHist = [entry, ...history];
+    saveHistory(newHist);
+
+    // Reset stock for this vendor's items
+    const newStock = { ...stock };
+    vendorItems.forEach(item => { newStock[item.id] = 0; });
+    saveStock(newStock);
+    showFlash(`✓ ${vendorName} order submitted`);
+  };
+
+  // ── Print order PDF ──
+  const printOrderPDF = (entry) => {
+    const rows = entry.lines.filter(i => i.qty > 0).map(item =>
+      `<tr><td>${item.name}</td><td style="text-align:center">${(item.section || "").replace(/[^\w\s\-&]/g,"").trim()}</td><td style="text-align:center;font-weight:700">${item.qty} ${item.order_unit}</td></tr>`
+    ).join("");
+    const win = window.open("", "_blank");
+    win.document.write(`<html><head><title>${entry.vendor} — WK${entry.weekNumber}</title>
+      <style>body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:700px;margin:0 auto}h1{font-size:20px;margin:0 0 4px}.biz{font-size:24px;font-weight:900;margin:0 0 2px;text-transform:uppercase;letter-spacing:1px}.vendor{font-size:22px;font-weight:700;color:#444;margin:0 0 6px}.meta{color:#666;font-size:12px;margin-bottom:24px;padding-bottom:12px;border-bottom:2px solid #e5e7eb}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#1e293b;color:#fff;padding:10px 14px;text-align:left}td{padding:10px 14px;border-bottom:1px solid #e5e7eb}tr:nth-child(even) td{background:#f9fafb}.footer{margin-top:20px;color:#999;font-size:11px;border-top:1px solid #e5e7eb;padding-top:12px}@media print{body{padding:16px}}</style></head><body>
+      <div class="biz">Tommy's Pizza</div>
+      <div class="vendor">${entry.vendor}</div>
+      <h1>Order — Week ${entry.weekNumber}</h1>
+      <div class="meta">${entry.day} · ${new Date(entry.date).toLocaleDateString()} · ${entry.totalItems} items · Ordered by: ${entry.orderedBy || "Owner"}</div>
+      <table><thead><tr><th>Item</th><th style="text-align:center">Location</th><th style="text-align:center">Qty to Order</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="footer">MOE · Make Ordering Easy · Printed ${new Date().toLocaleDateString()}</div>
+      <script>window.onload=()=>window.print()<\/script></body></html>`);
+    win.document.close();
+  };
+
+  // Styles
+  const IS = { width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "#f0f2f5", fontSize: 13, fontFamily: "inherit", outline: "none" };
+  const VTAB = (active, color = "#00e5ff") => ({ all: "unset", cursor: "pointer", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: active ? color + "15" : "rgba(255,255,255,0.03)", color: active ? color : "rgba(255,255,255,0.35)", border: active ? `1px solid ${color}30` : "1px solid rgba(255,255,255,0.06)" });
+
+  if (loading) return <div style={{ textAlign: "center", padding: 60, color: "rgba(255,255,255,0.3)" }}>Loading MOE data from Supabase...</div>;
+
+  const DAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const today = new Date().getDay();
+  const todayVendors = vendors.filter(v => v.orderDays && v.orderDays.includes(today));
+
+  return (
+    <div style={{ animation: "fadeIn 0.3s ease" }}>
+      {/* Tabs + flash */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setView("inventory")} style={VTAB(view === "inventory")}>Inventory</button>
+          <button onClick={() => setView("orders")} style={VTAB(view === "orders", "#f59e0b")}>
+            Orders{todayVendors.length > 0 ? ` (${todayVendors.length} today)` : ""}
+          </button>
+          <button onClick={() => setView("history")} style={VTAB(view === "history", "#a78bfa")}>History ({history.length})</button>
+          <button onClick={() => setView("backend")} style={VTAB(view === "backend", "#60a5fa")}>Backend</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {flash && <span style={{ fontSize: 12, fontWeight: 600, color: "#00e5a0", padding: "4px 10px", borderRadius: 6, background: "rgba(0,229,160,0.1)" }}>{flash}</span>}
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 6, background: moeStatus === "connected" ? "rgba(0,229,160,0.1)" : "rgba(245,158,11,0.1)", color: moeStatus === "connected" ? "#00e5a0" : "#f59e0b" }}>
+            {moeStatus === "connected" ? "LIVE" : "MOCK"}
+          </span>
+        </div>
+      </div>
+
+      {/* ═══ INVENTORY VIEW ═══ */}
+      {view === "inventory" && <>
+        {/* Order day alert */}
+        {todayVendors.length > 0 && (
+          <div style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 20 }}>📦</span>
+            <div>
+              <div style={{ color: "#f59e0b", fontWeight: 600, fontSize: 14 }}>Order day! {todayVendors.map(v => v.name).join(", ")}</div>
+              <div style={{ color: "rgba(245,158,11,0.6)", fontSize: 12 }}>Count stock, then go to Orders to submit</div>
+            </div>
+          </div>
+        )}
+
+        {/* Low stock alert */}
+        {lowStockItems.length > 0 && (
+          <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#ef4444", marginBottom: 6 }}>⚠ {lowStockItems.length} items below reorder point</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {lowStockItems.slice(0, 12).map(i => <span key={i.id} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>{i.name} ({stock[i.id] ?? 0})</span>)}
+            </div>
+          </div>
+        )}
+
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items..." style={{ ...IS, padding: "10px 16px", fontSize: 14, maxWidth: 400, marginBottom: 16 }}/>
+
+        {/* Sections */}
+        {inventory.map(section => {
+          const sectionItems = section.items.filter(i => !search || i.name.toLowerCase().includes(search.toLowerCase()));
+          if (sectionItems.length === 0) return null;
+          return (
+            <div key={section.section} style={{ marginBottom: 16 }}>
+              <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", borderRadius: "12px 12px 0 0", padding: "8px 16px" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.6)", letterSpacing: 1, textTransform: "uppercase" }}>{section.section}</span>
+              </div>
+              <div style={{ border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 12px 12px", overflow: "hidden" }}>
+                {sectionItems.map((item, idx) => {
+                  const s = stock[item.id] ?? 0;
+                  const status = getStatus(item, s);
+                  const orderQty = calcOrderQty(item, s);
+                  return (
+                    <div key={item.id} style={{ padding: "10px 14px", background: idx % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderTop: idx > 0 ? "1px solid rgba(255,255,255,0.03)" : "none" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                          <span style={{ color: "#f0f2f5", fontSize: 14, fontWeight: 500 }}>{item.name}</span>
+                          {(item.vendor || item.supplier) && <span style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4, padding: "1px 6px", color: "rgba(255,255,255,0.35)", fontSize: 9 }}>{item.vendor || item.supplier}</span>}
+                        </div>
+                        <span style={{ background: status.bg, color: status.color, borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 600 }}>{status.label}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5 }}>Stock</span>
+                          <button onClick={() => updateStock(item.id, Math.max(0, s - 1))} style={{ width: 32, height: 32, background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 8, color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+                          <input type="number" value={s} min={0} onChange={e => updateStock(item.id, e.target.value === "" ? 0 : e.target.value)} onFocus={e => e.target.select()}
+                            style={{ width: 52, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: 6, color: "#f0f2f5", fontSize: 16, fontWeight: 700, textAlign: "center", outline: "none" }}/>
+                          <button onClick={() => updateStock(item.id, s + 1)} style={{ width: 32, height: 32, background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 8, color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+                        </div>
+                        {orderQty > 0 && <span style={{ background: "rgba(239,68,68,0.15)", color: "#fca5a5", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700 }}>Order {orderQty} {item.order_unit}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {inventory.length === 0 && <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.3)" }}>No inventory data. Check MOE connection.</div>}
+      </>}
+
+      {/* ═══ ORDERS VIEW ═══ */}
+      {view === "orders" && <>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Orders — {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][today]}</h3>
+        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>{todayVendors.length} vendor{todayVendors.length !== 1 ? "s" : ""} ordering today</p>
+
+        {vendors.length === 0 && <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.3)" }}>No vendors configured. Set up vendors in the MOE app.</div>}
+
+        {vendors.map(vendor => {
+          const vendorItems = allItems.filter(i => (i.vendor || i.supplier || "").trim().toLowerCase() === vendor.name.toLowerCase());
+          const orderLines = vendorItems.map(item => ({
+            ...item, qty: calcOrderQty(item, stock[item.id] ?? 0), currentStock: stock[item.id] ?? 0,
+          }));
+          const needsOrder = orderLines.filter(l => l.qty > 0);
+          const isToday = vendor.orderDays && vendor.orderDays.includes(today);
+
+          return (
+            <div key={vendor.id || vendor.name} style={{ marginBottom: 20 }}>
+              <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", borderRadius: "12px 12px 0 0", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 700 }}>📦 {vendor.name}</span>
+                    {isToday && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}>TODAY</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 2 }}>
+                    {vendorItems.length} items · {needsOrder.length} to order · Orders on {(vendor.orderDays || []).map(d => DAYS_SHORT[d]).join(", ")}
+                  </div>
+                </div>
+                {needsOrder.length > 0 && (
+                  <button onClick={() => submitOrder(vendor.name)} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#f0f2f5", color: "#080c16", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Submit Order</button>
+                )}
+              </div>
+              <div style={{ border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 12px 12px", overflow: "hidden" }}>
+                {needsOrder.length === 0 ? (
+                  <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>✅ All stocked up</div>
+                ) : (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 70px 100px", padding: "6px 16px", background: "rgba(0,0,0,0.2)" }}>
+                      {["Item", "Stock", "Status", "Order"].map(h => <span key={h} style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.25)", letterSpacing: 0.5, textTransform: "uppercase" }}>{h}</span>)}
+                    </div>
+                    {needsOrder.map((item, idx) => {
+                      const status = getStatus(item, item.currentStock);
+                      return (
+                        <div key={item.id} style={{ display: "grid", gridTemplateColumns: "1fr 80px 70px 100px", padding: "10px 16px", alignItems: "center", background: idx % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderTop: "1px solid rgba(255,255,255,0.03)" }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: "#f0f2f5" }}>{item.name}</div>
+                            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)" }}>{(item.section || "").replace(/[^\w\s\-&]/g, "").trim()} · {item.order_unit}</div>
+                          </div>
+                          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{item.currentStock} / {item.max_stock || 10}</span>
+                          <span style={{ background: status.bg, color: status.color, borderRadius: 5, padding: "2px 8px", fontSize: 10, fontWeight: 600 }}>{status.label}</span>
+                          <span style={{ background: "rgba(239,68,68,0.15)", color: "#fca5a5", borderRadius: 7, padding: "4px 10px", fontSize: 13, fontWeight: 700 }}>{item.qty} {item.order_unit}</span>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </>}
+
+      {/* ═══ HISTORY VIEW ═══ */}
+      {view === "history" && <>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Order History</h3>
+        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>Past orders by week</p>
+
+        {history.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.3)" }}>No orders yet. Submit an order from the Orders tab.</div>
+        ) : (() => {
+          // Group by week
+          const byWeek = {};
+          history.forEach(e => {
+            const key = `${e.year}-WK${String(e.weekNumber).padStart(2, "0")}`;
+            if (!byWeek[key]) byWeek[key] = [];
+            byWeek[key].push(e);
+          });
+          return Object.entries(byWeek).sort((a, b) => b[0].localeCompare(a[0])).map(([weekKey, entries]) => (
+            <div key={weekKey} style={{ marginBottom: 16 }}>
+              <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", borderRadius: "12px 12px 0 0", padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#a78bfa" }}>{weekKey}</span>
+                <span style={{ fontSize: 12, color: "rgba(255,255,255,0.3)" }}>{entries.length} order{entries.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div style={{ border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 12px 12px", overflow: "hidden" }}>
+                {entries.map((entry, idx) => (
+                  <div key={entry.id} style={{ padding: "12px 16px", background: idx % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderTop: idx > 0 ? "1px solid rgba(255,255,255,0.03)" : "none", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#f0f2f5" }}>
+                        {entry.type === "quick" ? "⚡" : "📦"} {entry.vendor}
+                        {entry.type === "quick" && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(0,229,255,0.1)", color: "#00e5ff" }}>QUICK</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 2 }}>
+                        {entry.day} · {new Date(entry.date).toLocaleDateString()} · {entry.totalItems} item{entry.totalItems !== 1 ? "s" : ""}
+                        {entry.orderedBy ? ` · ${entry.orderedBy}` : ""}
+                      </div>
+                    </div>
+                    <button onClick={() => printOrderPDF(entry)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={e => e.currentTarget.style.color = "#f0f2f5"} onMouseLeave={e => e.currentTarget.style.color = "rgba(255,255,255,0.4)"}>🖨 PDF</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ));
+        })()}
+      </>}
+
+      {/* ═══ BACKEND VIEW ═══ */}
+      {view === "backend" && <>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Backend — Edit Items</h3>
+            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)" }}>Click any cell to edit. Changes save to MOE automatically.</p>
+          </div>
+        </div>
+
+        {inventory.map(section => (
+          <div key={section.section} style={{ marginBottom: 16 }}>
+            <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", borderRadius: "12px 12px 0 0", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.6)", letterSpacing: 1, textTransform: "uppercase" }}>{section.section}</span>
+              <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>{section.items.length} items</span>
+            </div>
+            <div style={{ border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 12px 12px", overflow: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 80px 60px 70px 70px", padding: "6px 14px", background: "rgba(0,0,0,0.2)", minWidth: 600 }}>
+                {["Item", "Vendor", "Unit", "UPU", "Max", "Reorder"].map(h => <span key={h} style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.25)", letterSpacing: 0.5, textTransform: "uppercase" }}>{h}</span>)}
+              </div>
+              {section.items.map((item, idx) => (
+                <div key={item.id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 80px 60px 70px 70px", padding: "8px 14px", alignItems: "center", background: idx % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderTop: "1px solid rgba(255,255,255,0.03)", minWidth: 600 }}>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: "#f0f2f5" }}>{item.name}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{item.vendor || item.supplier || "—"}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{item.order_unit}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{item.upu || 1}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{item.max_stock || 10}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{item.reorder || 1}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </>}
+    </div>
+  );
+}
+
 // ─── P&L REPORTS MODULE ──────────────────────────────────────
 function PnLReports() {
   const [period, setPeriod] = useState("weekly");
@@ -1904,7 +2265,8 @@ export default function OwnersHQDashboard() {
           {active === "recipes" && <RecipeCards ingredients={ingredients} setIngredients={setIngredients} prepItems={prepItems} setPrepItems={setPrepItems} recipes={recipes} setRecipes={setRecipes} categories={categories} setCategories={setCategories} />}
           {active === "costing" && <PrepCosting categories={categories} setCategories={setCategories} ingredients={ingredients} setIngredients={setIngredients} prepItems={prepItems} setPrepItems={setPrepItems} recipes={recipes} setRecipes={setRecipes} />}
           {active === "pnl" && <PnLReports />}
-          {active !== "overview" && active !== "menu" && active !== "costing" && active !== "recipes" && active !== "pnl" && currentMod && <ModulePlaceholder mod={currentMod} />}
+          {active === "moe" && <MoeModule ingredients={ingredients} setIngredients={setIngredients} moeStatus={moeStatus} />}
+          {active !== "overview" && active !== "menu" && active !== "costing" && active !== "recipes" && active !== "pnl" && active !== "moe" && currentMod && <ModulePlaceholder mod={currentMod} />}
         </div>
       </main>
     </div>
