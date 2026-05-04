@@ -1123,7 +1123,7 @@ function PrepCosting({ categories, setCategories, ingredients, setIngredients, p
 
 // ─── MOE INVENTORY MODULE ────────────────────────────────────
 // ─── MOE INVENTORY MODULE (Owner View) ──────────────────────
-function MoeModule({ ingredients, setIngredients, moeStatus }) {
+function MoeModule({ ingredients, setIngredients, moeStatus, user }) {
   const [view, setView] = useState("inventory"); // inventory | orders | history | backend
   const [inventory, setInventory] = useState([]);
   const [stock, setStock] = useState({});
@@ -1139,10 +1139,10 @@ function MoeModule({ ingredients, setIngredients, moeStatus }) {
   useEffect(() => {
     const load = async () => {
       const [inv, st, vd, hi] = await Promise.all([
-        sbRead("tommys", "added"),
-        sbRead("tommys", "stock"),
-        sbRead("tommys", "vendors"),
-        sbRead("tommys", "history"),
+        sbRead(user.group, "added"),
+        sbRead(user.group, "stock"),
+        sbRead(user.group, "vendors"),
+        sbRead(user.group, "history"),
       ]);
 
       // Parse inventory from "added" format: { "section": [items] }
@@ -1162,14 +1162,14 @@ function MoeModule({ ingredients, setIngredients, moeStatus }) {
   }, []);
 
   // ── Save helpers ──
-  const saveStock = async (newStock) => { setStock(newStock); await sbWrite("tommys", "stock", newStock); };
-  const saveHistory = async (newHist) => { setHistory(newHist); await sbWrite("tommys", "history", newHist); };
+  const saveStock = async (newStock) => { setStock(newStock); await sbWrite(user.group, "stock", newStock); };
+  const saveHistory = async (newHist) => { setHistory(newHist); await sbWrite(user.group, "history", newHist); };
   const saveInventory = async (newInv) => {
     setInventory(newInv);
     // Convert back to "added" format for Supabase
     const added = {};
     newInv.forEach(s => { added[s.section] = s.items; });
-    await sbWrite("tommys", "added", added);
+    await sbWrite(user.group, "added", added);
   };
 
   // ── Stock helpers ──
@@ -1484,7 +1484,7 @@ function MoeModule({ ingredients, setIngredients, moeStatus }) {
 }
 
 // ─── P&L REPORTS MODULE ──────────────────────────────────────
-function PnLReports() {
+function PnLReports({ user }) {
   const [period, setPeriod] = useState("weekly");
   const [selectedWeek, setSelectedWeek] = useState("2025-W14");
   const [selectedMonth, setSelectedMonth] = useState("2025-03");
@@ -1535,7 +1535,7 @@ function PnLReports() {
   // Load P&L data from Supabase on mount
   useEffect(() => {
     const load = async () => {
-      const saved = await sbRead("tommys", "pnl_data");
+      const saved = await sbRead(user.group, "pnl_data");
       if (saved && saved.revenue) {
         setSections(saved);
       }
@@ -1549,7 +1549,7 @@ function PnLReports() {
     if (!loaded) return; // don't save on initial load
     const timeout = setTimeout(async () => {
       setSaveStatus("saving");
-      const ok = await sbWrite("tommys", "pnl_data", sections);
+      const ok = await sbWrite(user.group, "pnl_data", sections);
       setSaveStatus(ok ? "saved" : "error");
       setTimeout(() => setSaveStatus(""), 2000);
     }, 1500);
@@ -1931,7 +1931,7 @@ function NavItem({ item, active, setActive, collapsed }) {
   const isActive = active === item.id;
   const isMuted = item.id === "logout";
   return (
-    <button onClick={() => item.id !== "logout" && setActive(item.id)} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} style={{
+    <button onClick={() => setActive(item.id)} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} style={{
       all: "unset", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, width: "100%",
       padding: collapsed ? "9px 0" : "9px 12px", justifyContent: collapsed ? "center" : "flex-start",
       borderRadius: 10, background: isActive ? "rgba(0,229,255,0.08)" : h ? "rgba(255,255,255,0.03)" : "transparent",
@@ -1947,7 +1947,7 @@ function NavItem({ item, active, setActive, collapsed }) {
 }
 
 // ─── SIDEBAR CONTENT ─────────────────────────────────────────
-function SidebarContent({ collapsed, setCollapsed, active, setActive }) {
+function SidebarContent({ collapsed, setCollapsed, active, setActive, onLogout }) {
   const tools = NAV.filter(n => n.section === "tools");
   const bottom = NAV.filter(n => n.section === "bottom");
   return (
@@ -1976,14 +1976,116 @@ function SidebarContent({ collapsed, setCollapsed, active, setActive }) {
 
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: collapsed ? "12px 8px" : "12px" }}>
         {bottom.map(item => <NavItem key={item.id} item={item} active={active} setActive={setActive} collapsed={collapsed} />)}
-        <NavItem item={{ id: "logout", label: "Sign Out", icon: "logout", section: "bottom" }} active="" setActive={() => {}} collapsed={collapsed} />
+        <NavItem item={{ id: "logout", label: "Sign Out", icon: "logout", section: "bottom" }} active="" setActive={() => onLogout()} collapsed={collapsed} />
       </div>
     </>
   );
 }
 
 // ─── MAIN APP ────────────────────────────────────────────────
+// ─── LOGIN SCREEN ────────────────────────────────────────────
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState(() => { try { return localStorage.getItem("ohq_email") || ""; } catch { return ""; } });
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const IS = { width: "100%", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "#f0f2f5", fontSize: 15, fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
+
+  const handleLogin = async () => {
+    setError(""); setLoading(true);
+    const emailLower = email.toLowerCase().trim();
+
+    // Check MOE registered accounts
+    const accounts = await sbRead("__moe_accounts__", "accounts");
+    if (accounts) {
+      const acct = accounts[emailLower];
+      if (acct && acct.password === pass) {
+        try { localStorage.setItem("ohq_email", emailLower); } catch {}
+        setLoading(false);
+        onLogin({ name: `${acct.ownerFirst} ${acct.ownerLast}`, role: acct.role, group: acct.group, email: emailLower, business: acct.business });
+        return;
+      }
+    }
+
+    // Demo fallback
+    if (emailLower === "owner@kitchen.com" && pass === "owner123") {
+      try { localStorage.setItem("ohq_email", emailLower); } catch {}
+      setLoading(false);
+      onLogin({ name: "Demo Owner", role: "owner", group: "demo", email: emailLower, business: { name: "Demo Kitchen" } });
+      return;
+    }
+    if (emailLower === "tommyspizza11419@gmail.com" && pass) {
+      try { localStorage.setItem("ohq_email", emailLower); } catch {}
+      setLoading(false);
+      onLogin({ name: "Ronnie", role: "owner", group: "tommys", email: emailLower, business: { name: "Tommy's Pizza" } });
+      return;
+    }
+
+    setError("Invalid email or password."); setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#080c16", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Outfit','DM Sans',sans-serif", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <svg viewBox="0 0 100 100" width="64" height="64" style={{ margin: "0 auto 12px", display: "block" }}>
+            <circle cx="46" cy="50" r="44" fill="none" stroke="#00e5ff" strokeWidth="3"/>
+            <rect x="16" y="44" width="8" height="30" rx="3" fill="#00e5ff" opacity="0.35"/>
+            <rect x="28" y="32" width="8" height="42" rx="3" fill="#00e5ff" opacity="0.55"/>
+            <rect x="40" y="20" width="8" height="54" rx="3" fill="#00e5ff"/>
+            <rect x="52" y="36" width="8" height="38" rx="3" fill="#00e5ff" opacity="0.6"/>
+            <rect x="64" y="42" width="8" height="32" rx="3" fill="#00e5ff" opacity="0.35"/>
+            <line x1="90" y1="50" x2="100" y2="50" stroke="#00e5ff" strokeWidth="3" strokeLinecap="round"/>
+            <line x1="95" y1="50" x2="95" y2="58" stroke="#00e5ff" strokeWidth="2.5" strokeLinecap="round"/>
+          </svg>
+          <h1 style={{ fontSize: 28, fontWeight: 700, color: "#f0f2f5", margin: "0 0 4px" }}>OwnersHQ</h1>
+          <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0 }}>Restaurant Management Platform</p>
+        </div>
+
+        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: 28 }}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.35)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Email</label>
+            <input value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} placeholder="you@restaurant.com" type="email" style={IS} autoFocus/>
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.35)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Password</label>
+            <input value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} type="password" placeholder="••••••••" style={IS}/>
+          </div>
+          {error && <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 14px", color: "#ef4444", fontSize: 13, marginBottom: 16 }}>{error}</div>}
+          <button onClick={handleLogin} disabled={loading} style={{ width: "100%", padding: "14px", borderRadius: 10, border: "none", background: loading ? "rgba(255,255,255,0.1)" : "linear-gradient(135deg, #00e5ff, #0ea5e9)", color: loading ? "rgba(255,255,255,0.3)" : "#080c16", fontSize: 16, fontWeight: 700, cursor: loading ? "default" : "pointer", fontFamily: "inherit" }}>
+            {loading ? "Signing in..." : "Sign In"}
+          </button>
+          <p style={{ textAlign: "center", fontSize: 12, color: "rgba(255,255,255,0.2)", marginTop: 16 }}>Use your MOE account credentials</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OwnersHQDashboard() {
+  const [user, setUser] = useState(null);
+
+  // Auto-login from saved session
+  useEffect(() => {
+    const saved = localStorage.getItem("ohq_user");
+    if (saved) try { setUser(JSON.parse(saved)); } catch {}
+  }, []);
+
+  const handleLogin = (u) => {
+    setUser(u);
+    try { localStorage.setItem("ohq_user", JSON.stringify(u)); } catch {}
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    try { localStorage.removeItem("ohq_user"); } catch {}
+  };
+
+  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  return <DashboardApp user={user} onLogout={handleLogout} />;
+}
+
+function DashboardApp({ user, onLogout }) {
   const [active, setActive] = useState("overview");
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -1999,9 +2101,9 @@ export default function OwnersHQDashboard() {
     setMounted(true);
     const loadMoe = async () => {
       try {
-        const addedData = await sbRead("tommys", "added");
-        const stockData = await sbRead("tommys", "stock");
-        const itemData = await sbRead("tommys", "itemdata");
+        const addedData = await sbRead(user.group, "added");
+        const stockData = await sbRead(user.group, "stock");
+        const itemData = await sbRead(user.group, "itemdata");
         
         if (addedData && typeof addedData === "object") {
           const parsed = [];
@@ -2077,14 +2179,14 @@ export default function OwnersHQDashboard() {
         width: collapsed ? 72 : 248, background: "var(--surface)", borderRight: "1px solid var(--border)",
         display: "flex", flexDirection: "column", transition: "width 0.3s cubic-bezier(0.4,0,0.2,1)", flexShrink: 0, overflow: "hidden", zIndex: 20,
       }}>
-        <SidebarContent collapsed={collapsed} setCollapsed={setCollapsed} active={active} setActive={setActive} />
+        <SidebarContent collapsed={collapsed} setCollapsed={setCollapsed} active={active} setActive={setActive} onLogout={onLogout} />
       </nav>
 
       {/* Mobile overlay */}
       {mobileOpen && (
         <div className="mob-overlay" style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", animation: "fadeIn 0.2s ease" }} onClick={() => setMobileOpen(false)}>
           <nav style={{ width: 260, height: "100%", background: "var(--surface)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", animation: "slideX 0.25s ease" }} onClick={e => e.stopPropagation()}>
-            <SidebarContent collapsed={false} setCollapsed={() => {}} active={active} setActive={(id) => { setActive(id); setMobileOpen(false); }} />
+            <SidebarContent collapsed={false} setCollapsed={() => {}} active={active} setActive={(id) => { setActive(id); setMobileOpen(false); }} onLogout={onLogout} />
           </nav>
         </div>
       )}
@@ -2102,7 +2204,7 @@ export default function OwnersHQDashboard() {
             </button>
             <span style={{ fontSize: 18 }}>🏪</span>
             <div>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>Tommy's Pizza</span>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{user?.business?.name || user?.group || "My Restaurant"}</span>
               <span style={{ fontSize: 9, marginLeft: 8, padding: "2px 7px", borderRadius: 5, background: "rgba(0,229,160,0.12)", color: "#00e5a0", fontWeight: 700, letterSpacing: 0.5, verticalAlign: "middle" }}>PRO</span>
             </div>
           </div>
@@ -2264,8 +2366,8 @@ export default function OwnersHQDashboard() {
           {active === "menu" && <MenuBuilder categories={categories} setCategories={setCategories} />}
           {active === "recipes" && <RecipeCards ingredients={ingredients} setIngredients={setIngredients} prepItems={prepItems} setPrepItems={setPrepItems} recipes={recipes} setRecipes={setRecipes} categories={categories} setCategories={setCategories} />}
           {active === "costing" && <PrepCosting categories={categories} setCategories={setCategories} ingredients={ingredients} setIngredients={setIngredients} prepItems={prepItems} setPrepItems={setPrepItems} recipes={recipes} setRecipes={setRecipes} />}
-          {active === "pnl" && <PnLReports />}
-          {active === "moe" && <MoeModule ingredients={ingredients} setIngredients={setIngredients} moeStatus={moeStatus} />}
+          {active === "pnl" && <PnLReports user={user} />}
+          {active === "moe" && <MoeModule ingredients={ingredients} setIngredients={setIngredients} moeStatus={moeStatus} user={user} />}
           {active !== "overview" && active !== "menu" && active !== "costing" && active !== "recipes" && active !== "pnl" && active !== "moe" && currentMod && <ModulePlaceholder mod={currentMod} />}
         </div>
       </main>
