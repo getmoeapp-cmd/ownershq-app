@@ -2002,7 +2002,10 @@ function LoginScreen({ onLogin }) {
       if (acct && acct.password === pass) {
         try { localStorage.setItem("ohq_email", emailLower); } catch {}
         setLoading(false);
-        onLogin({ name: `${acct.ownerFirst} ${acct.ownerLast}`, role: acct.role, group: acct.group, email: emailLower, business: acct.business });
+        // Map known accounts to correct group_id
+        const groupOverrides = { "tommyspizza11419@gmail.com": "tommys" };
+        const group = groupOverrides[emailLower] || acct.group;
+        onLogin({ name: `${acct.ownerFirst} ${acct.ownerLast}`, role: acct.role, group, email: emailLower, business: acct.business });
         return;
       }
     }
