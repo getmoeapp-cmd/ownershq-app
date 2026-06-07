@@ -1376,8 +1376,14 @@ function MoeModule({ ingredients, setIngredients, moeStatus, user }) {
         });
       }
 
-      if (sections.length > 0) setInventory(sections);
-      else setInventory(DEFAULT_INVENTORY); // Fallback to Tommy's defaults
+      if (sections.length > 0) {
+        setInventory(sections);
+      } else {
+        // No inventory in Supabase — use defaults and save them so both apps can read them
+        setInventory(DEFAULT_INVENTORY);
+        await sbWrite(user.group, "inventory", DEFAULT_INVENTORY);
+        console.log("MOE: Saved default inventory to Supabase");
+      }
       setStock(st || {});
       setVendors(vd || []);
       setHistory(hi || []);
@@ -2634,3 +2640,4 @@ function DashboardApp({ user, onLogout }) {
     </div>
   );
 }
+                  
