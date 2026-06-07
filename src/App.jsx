@@ -1138,25 +1138,49 @@ function MoeModule({ ingredients, setIngredients, moeStatus, user }) {
   // ── Load all MOE data from Supabase ──
   useEffect(() => {
     const load = async () => {
-      const [inv, st, vd, hi] = await Promise.all([
+      const [inv, added, st, vd, hi] = await Promise.all([
+        sbRead(user.group, "inventory"),
         sbRead(user.group, "added"),
         sbRead(user.group, "stock"),
         sbRead(user.group, "vendors"),
         sbRead(user.group, "history"),
       ]);
 
-      // Parse inventory from "added" format: { "section": [items] }
-      if (inv && typeof inv === "object") {
-        const sections = Object.entries(inv).map(([section, items]) => ({
-          section,
-          items: Array.isArray(items) ? items.map(i => ({ ...i, id: i.id || Date.now() + Math.random() })) : [],
+      // MOE stores full inventory under "inventory" key as array: [{ section, items }]
+      // And manually added items under "added" key as object: { "section": [items] }
+      let sections = [];
+
+      // Try "inventory" key first (array of { section, items })
+      if (inv && Array.isArray(inv) && inv.length > 0) {
+        sections = inv.map(s => ({
+          section: s.section,
+          items: Array.isArray(s.items) ? s.items.map(i => ({ ...i, id: i.id || Date.now() + Math.random() })) : [],
         })).filter(s => s.items.length > 0);
-        setInventory(sections);
       }
+
+      // Merge in any items from "added" key (object: { "section": [items] })
+      if (added && typeof added === "object" && !Array.isArray(added)) {
+        Object.entries(added).forEach(([sectionName, items]) => {
+          if (!Array.isArray(items)) return;
+          const existing = sections.find(s => s.section === sectionName);
+          if (existing) {
+            // Add items that don't already exist (by id)
+            const existingIds = new Set(existing.items.map(i => i.id));
+            items.forEach(item => {
+              if (!existingIds.has(item.id)) existing.items.push({ ...item, id: item.id || Date.now() + Math.random() });
+            });
+          } else {
+            sections.push({ section: sectionName, items: items.map(i => ({ ...i, id: i.id || Date.now() + Math.random() })) });
+          }
+        });
+      }
+
+      if (sections.length > 0) setInventory(sections);
       setStock(st || {});
       setVendors(vd || []);
       setHistory(hi || []);
       setLoading(false);
+      console.log(`MOE: Loaded ${sections.reduce((t, s) => t + s.items.length, 0)} items across ${sections.length} sections`);
     };
     load();
   }, []);
@@ -1166,7 +1190,9 @@ function MoeModule({ ingredients, setIngredients, moeStatus, user }) {
   const saveHistory = async (newHist) => { setHistory(newHist); await sbWrite(user.group, "history", newHist); };
   const saveInventory = async (newInv) => {
     setInventory(newInv);
-    // Convert back to "added" format for Supabase
+    // Save as array format to "inventory" key (MOE's native format)
+    await sbWrite(user.group, "inventory", newInv);
+    // Also update "added" key for backward compat
     const added = {};
     newInv.forEach(s => { added[s.section] = s.items; });
     await sbWrite(user.group, "added", added);
@@ -1485,10 +1511,12 @@ function MoeModule({ ingredients, setIngredients, moeStatus, user }) {
 
 // ─── P&L REPORTS MODULE ──────────────────────────────────────
 function PnLReports({ user }) {
+  const now = new Date();
+  const getISOWeek = () => { const d = new Date(now); d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7)); const ys = new Date(Date.UTC(d.getUTCFullYear(), 0, 1)); const wk = Math.ceil((((d - ys) / 86400000) + 1) / 7); return `${d.getUTCFullYear()}-W${String(wk).padStart(2,"0")}`; };
   const [period, setPeriod] = useState("weekly");
-  const [selectedWeek, setSelectedWeek] = useState("2025-W14");
-  const [selectedMonth, setSelectedMonth] = useState("2025-03");
-  const [selectedDay, setSelectedDay] = useState("2025-04-05");
+  const [selectedWeek, setSelectedWeek] = useState(getISOWeek());
+  const [selectedMonth, setSelectedMonth] = useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
+  const [selectedDay, setSelectedDay] = useState(now.toISOString().split("T")[0]);
 
   // Fully dynamic — every section is an array of { id, name, amount, freq }
   const [sections, setSections] = useState({
@@ -2104,49 +2132,76 @@ function DashboardApp({ user, onLogout }) {
     setMounted(true);
     const loadMoe = async () => {
       try {
+        const invData = await sbRead(user.group, "inventory");
         const addedData = await sbRead(user.group, "added");
         const stockData = await sbRead(user.group, "stock");
         const itemData = await sbRead(user.group, "itemdata");
         
-        if (addedData && typeof addedData === "object") {
-          const parsed = [];
-          // addedData is organized by section name, each containing an array of items
-          Object.entries(addedData).forEach(([sectionName, items]) => {
-            if (Array.isArray(items)) {
-              items.forEach(item => {
-                if (!item || !item.name) return;
-                // Get any overrides from itemdata
-                const overrides = itemData?.[String(item.id)] || {};
-                const stockLevel = stockData?.[String(item.id)] ?? 0;
-                parsed.push({
-                  id: `moe-${item.id}`,
-                  name: item.name,
-                  vendor: overrides.supplier || item.supplier || "",
-                  purchasePrice: String(item.price || item.purchasePrice || "0"),
-                  unitsPerCase: item.upu || overrides.upu || 1,
-                  unitType: item.order_unit || overrides.order_unit || "each",
-                  costPerUnit: String(item.costPerUnit || "0"),
-                  category: sectionName.replace(/[\u{1F300}-\u{1FAD6}]/gu, "").trim(),
-                  stock: typeof stockLevel === "object" ? stockLevel.qty || 0 : stockLevel,
-                  reorderAt: overrides.reorder || item.reorder || 5,
-                  maxStock: overrides.max_stock || item.max_stock || 10,
-                  hidden: overrides._hidden || false,
-                  source: "moe",
-                });
+        const parsed = [];
+        
+        // Parse "inventory" key (array format: [{ section, items }])
+        if (invData && Array.isArray(invData)) {
+          invData.forEach(sec => {
+            if (!Array.isArray(sec.items)) return;
+            sec.items.forEach(item => {
+              if (!item || !item.name) return;
+              const overrides = itemData?.[String(item.id)] || {};
+              const stockLevel = stockData?.[String(item.id)] ?? 0;
+              parsed.push({
+                id: `moe-${item.id}`,
+                name: item.name,
+                vendor: overrides.supplier || item.vendor || item.supplier || "",
+                purchasePrice: String(item.price || item.purchasePrice || "0"),
+                unitsPerCase: item.upu || overrides.upu || 1,
+                unitType: item.order_unit || overrides.order_unit || "each",
+                costPerUnit: String(item.costPerUnit || "0"),
+                category: (sec.section || "").replace(/[\u{1F300}-\u{1FAD6}]/gu, "").trim(),
+                stock: typeof stockLevel === "object" ? stockLevel.qty || 0 : stockLevel,
+                reorderAt: overrides.reorder || item.reorder || 5,
+                maxStock: overrides.max_stock || item.max_stock || 10,
+                hidden: overrides._hidden || false,
+                source: "moe",
               });
-            }
+            });
           });
-          if (parsed.length > 0) {
-            setIngredients(parsed.filter(i => !i.hidden));
-            setMoeStatus("connected");
-            console.log(`MOE: Loaded ${parsed.length} items from Supabase`);
-          } else {
-            setMoeStatus("fallback");
-            console.log("MOE: No items found in added data, using mock");
-          }
+        }
+
+        // Also parse "added" key (object format: { "section": [items] })
+        if (addedData && typeof addedData === "object" && !Array.isArray(addedData)) {
+          Object.entries(addedData).forEach(([sectionName, items]) => {
+            if (!Array.isArray(items)) return;
+            items.forEach(item => {
+              if (!item || !item.name) return;
+              // Skip if already loaded from inventory key
+              if (parsed.some(p => p.id === `moe-${item.id}`)) return;
+              const overrides = itemData?.[String(item.id)] || {};
+              const stockLevel = stockData?.[String(item.id)] ?? 0;
+              parsed.push({
+                id: `moe-${item.id}`,
+                name: item.name,
+                vendor: overrides.supplier || item.vendor || item.supplier || "",
+                purchasePrice: String(item.price || item.purchasePrice || "0"),
+                unitsPerCase: item.upu || overrides.upu || 1,
+                unitType: item.order_unit || overrides.order_unit || "each",
+                costPerUnit: String(item.costPerUnit || "0"),
+                category: sectionName.replace(/[\u{1F300}-\u{1FAD6}]/gu, "").trim(),
+                stock: typeof stockLevel === "object" ? stockLevel.qty || 0 : stockLevel,
+                reorderAt: overrides.reorder || item.reorder || 5,
+                maxStock: overrides.max_stock || item.max_stock || 10,
+                hidden: overrides._hidden || false,
+                source: "moe",
+              });
+            });
+          });
+        }
+
+        if (parsed.length > 0) {
+          setIngredients(parsed.filter(i => !i.hidden));
+          setMoeStatus("connected");
+          console.log(`MOE: Loaded ${parsed.length} items from Supabase`);
         } else {
           setMoeStatus("fallback");
-          console.log("MOE: Could not read added data, using mock");
+          console.log("MOE: No items found, using mock");
         }
       } catch (e) {
         setMoeStatus("fallback");
