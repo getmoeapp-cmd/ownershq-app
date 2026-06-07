@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getInventoryWithPrices } from '../lib/moeAdapter';
-
+import { getInventoryWithPrices } from '../moeAdapter';
 export default function MoeBridgeTest() {
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
